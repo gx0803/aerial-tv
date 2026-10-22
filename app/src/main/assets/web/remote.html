@@ -109,9 +109,10 @@
   <div class="key" data-key="VolumeUp">音量 ＋</div>
 </div>
 
-<div class="row c2">
+<div class="row c3">
   <div class="key" data-act="brightness">亮度</div>
-  <div class="key" data-act="input">输入源</div>
+  <div class="key" data-act="hdmi1">HDMI 1</div>
+  <div class="key" data-act="hdmi2">HDMI 2</div>
 </div>
 
 <div class="compose">
@@ -194,7 +195,7 @@
   });
 
   // Not keys: routes the remote's side button takes, replayed as their own key sequences.
-  var ACTS = { brightness: 'api/remote/brightness', input: 'api/remote/input' };
+  var ACTS = { brightness: 'api/remote/brightness', hdmi1: 'api/remote/hdmi1', hdmi2: 'api/remote/hdmi2' };
   document.querySelectorAll('[data-act]').forEach(function (el) {
     var url = ACTS[el.dataset.act];
     if (!url) return;

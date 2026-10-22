@@ -144,26 +144,43 @@ object RemoteControl {
     }
 
     /**
-     * Walks the firmware's panel to its HDMI list, without choosing one.
+     * Walks the firmware's panel to its HDMI list and picks one, so the phone page's two buttons
+     * do the whole trip.
      *
      * Same reasoning as [openBrightness]: the inputs are listed by the TV input framework
-     * (com.xgimi.tvinput registers HDMI 1-3) but the passthrough Intent no app on this projector
+     * (com.xgimi.tvinput registers HDMI 1–3) but the passthrough Intent no app on this projector
      * answers, and the session that actually shows an input belongs to com.xgimi.xhplayer, a system
-     * app. The panel is the one route that works, so only the walk up to the list is sent here and
-     * the choice is left to the viewer: OK alone is HDMI 1, Down then OK is HDMI 2, on the page's
-     * own keys.
+     * app. The panel is the one route that works.
      *
-     * Side key (122) to open it, Down off the top row (which lands on 图像模式), Right to 输入源,
-     * and OK, which is what raises the source list - without that last press nothing appears.
+     * Side key (122) opens it, Down off the top row (which lands on 图像模式), Right to 输入源, and
+     * OK — without that last press nothing appears. The list then defaults to HDMI 1; HDMI 2 is
+     * one Down further. Each press is its own step with a beat between, since the panel is slow to
+     * react to a key sent while it is still opening.
      */
-    fun openInputSource(): Boolean {
+    private fun walkToHdmi(): String =
+        "input keyevent ${KeyEvent.KEYCODE_MOVE_HOME}" +
+            "; sleep 1" +
+            "; input keyevent ${KeyEvent.KEYCODE_DPAD_DOWN}" +
+            "; sleep 0.4" +
+            "; input keyevent ${KeyEvent.KEYCODE_DPAD_RIGHT}" +
+            "; sleep 0.4" +
+            "; input keyevent ${KeyEvent.KEYCODE_DPAD_CENTER}"
+
+    fun chooseHdmi1(): Boolean {
         if (!AdbBridge.connected) return false
         return AdbBridge.run(
-            "input keyevent ${KeyEvent.KEYCODE_MOVE_HOME}" +
-                "; sleep 1" +
+            walkToHdmi() +
+                "; sleep 0.6" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_CENTER}",
+        )
+    }
+
+    fun chooseHdmi2(): Boolean {
+        if (!AdbBridge.connected) return false
+        return AdbBridge.run(
+            walkToHdmi() +
+                "; sleep 0.6" +
                 "; input keyevent ${KeyEvent.KEYCODE_DPAD_DOWN}" +
-                "; sleep 0.4" +
-                "; input keyevent ${KeyEvent.KEYCODE_DPAD_RIGHT}" +
                 "; sleep 0.4" +
                 "; input keyevent ${KeyEvent.KEYCODE_DPAD_CENTER}",
         )

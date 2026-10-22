@@ -32,7 +32,7 @@
 >
 > 本仓库是 [pengchujin/aerial-tv](https://github.com/pengchujin/aerial-tv) 的**定制分支**，不是官方版本。
 >
-> **首先要郑重感谢原作者 [@pengchujin](https://github.com/pengchujin)。** Aerial 是一份完成度高得惊人的作品：tvOS 风格的桌面、航拍屏保、给国产电视做的各种适配，全部以 MIT 协议开源。没有这个项目和作者长期维护的机型适配笔记，后面的定制根本无从谈起。原项目的所有设计、实现与文档成果归原作者所有，本分支只是在其之上针对自家设备（极米 D7XPG / 当贝桌面固件）做了一些增删改，**所有定制内容同样以 MIT 协议开放**，并且欢迎回流给上游。
+> **首先要郑重感谢原作者 [@pengchujin](https://github.com/pengchujin)。** Aerial 是一份完成度高得惊人的作品：tvOS 风格的桌面、航拍屏保、给国产电视做的各种适配，全部以 MIT 协议开源。没有这个项目和作者长期维护的机型适配笔记，后面的定制根本无从谈起。原项目的所有设计、实现与文档成果归原作者所有，本分支只是在其之上针对自家设备（当贝 D7XPG 投影，Android 13，mt5873，固件内含 `com.xgimi.*` 框架组件与当贝桌面）做了一些增删改，**所有定制内容同样以 MIT 协议开放**，并且欢迎回流给上游。
 >
 > 定制内容集中在 `custom-1.48` 分支，main 保持与上游一致。改动清单见下方「[本分支的改动](#本分支的改动)」。
 
@@ -273,7 +273,7 @@ BUILD=1 KEEP_ADB=1 TV=<电视IP> tools/install.sh      # 用本地编译的 APK 
 
 ### 仍然存在的固件限制（不是本分支引入的）
 
-本机（极米 D7XPG）的固件会在 `system_server` 内部定时 force-stop 后台应用，`dumpsys activity exit-info` 里表现为 `reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) ... from pid 783`。它与内存无关——最后一次被杀时进程只占 11 MB。VidHub 这类普通应用同样会被杀，所以不是针对某个桌面。
+本机（当贝 D7XPG，Android 13，mt5873）的固件会在 `system_server` 内部定时 force-stop 后台应用，`dumpsys activity exit-info` 里表现为 `reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) ... from pid 783`。它与内存无关——最后一次被杀时进程只占 11 MB。VidHub 这类普通应用同样会被杀，所以不是针对某个桌面。
 
 后果是：遥控页随进程消失，靠上面的自愈约 5 秒内恢复；退出 App 时会有约 1 秒的当贝桌面闪现。应用层无法免疫（已实测电池优化白名单与后台运行 AppOp 都拦不住，独立进程也不行，因为 force-stop 是整包级），只能把影响压到最短。真要消除需要 root 后禁用固件里的对应组件。
 

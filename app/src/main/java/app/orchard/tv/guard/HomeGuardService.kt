@@ -123,6 +123,9 @@ class HomeGuardService : AccessibilityService() {
                 .onFailure { Log.w(TAG, "the remote page did not come up", it) }
             runCatching { GuardSetup.holdBackground(applicationContext) }
         }.start()
+        // The whitelist and the AppOp above cannot stop a force-stop; a foreground service can, by
+        // keeping the process out of the state the firmware clears. Bound services do not count.
+        KeepAliveService.start(this)
         // Bound a little after boot, or brought back after the firmware killed Aerial: either way
         // the stock launcher is what's in front, and the window change that showed it is long gone.
         // Not after an update, though: installing over Aerial also kills it, and whoever is watching

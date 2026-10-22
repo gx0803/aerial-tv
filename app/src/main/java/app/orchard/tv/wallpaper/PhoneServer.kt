@@ -115,6 +115,12 @@ class PhoneServer private constructor(private val context: Context, private val 
                     json(remoteState().put("written", RemoteControl.eraseLast()))
                 session.method == Method.POST && path == "/api/remote/clear" ->
                     json(remoteState().put("written", RemoteControl.clearText()))
+                // The lamp on a projector answers only its maker's own bar; this opens it.
+                session.method == Method.POST && path == "/api/remote/brightness" ->
+                    json(remoteState().put("opened", RemoteControl.openBrightness()))
+                // Likewise the inputs: this walks the firmware's panel to its HDMI list.
+                session.method == Method.POST && path == "/api/remote/input" ->
+                    json(remoteState().put("opened", RemoteControl.openInputSource()))
                 path == "/api/remote/history" -> json(RemoteHistory.json(context))
                 session.method == Method.POST && path == "/api/remote/history/delete" -> {
                     RemoteHistory.remove(context, form(session)["text"].orEmpty())

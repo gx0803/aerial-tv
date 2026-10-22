@@ -25,6 +25,11 @@
     <!-- Brightness on TVs that keep it in the standard system setting; granted over ADB. -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
+    <!-- The keep-alive service runs in the foreground, which is what keeps the process out of the
+         state the firmware clears. Android 14 wants the reason named; below 14 the flag is ignored. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- RevivalSync: the sync adapter that restarts Aerial after a force-stop. -->
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
@@ -150,6 +155,20 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/remote_service" />
+        </service>
+
+        <!-- Holds the process out of the "empty" state that this firmware (Dangbei D7XPG) clears on
+             a timer: a process with a foreground service is never parked as empty, so the killer
+             never selects it. The notification is on an IMPORTANCE_MIN channel, which cannot raise
+             a heads-up banner over whatever the viewer is watching. -->
+        <service
+            android:name=".guard.KeepAliveService"
+            android:directBootAware="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keeps the home screen and the phone remote reachable" />
         </service>
     </application>
 </manifest>

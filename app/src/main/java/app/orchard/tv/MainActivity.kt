@@ -41,6 +41,7 @@ import app.orchard.tv.apps.CustomIcons
 import app.orchard.tv.apps.TileArtFactory
 import app.orchard.tv.guard.GuardSetup
 import app.orchard.tv.guard.HomeGuardService
+import app.orchard.tv.guard.KeepAliveService
 import app.orchard.tv.remote.RemoteControl
 import app.orchard.tv.remote.RemoteKey
 import app.orchard.tv.ui.home.HomeScreen
@@ -102,6 +103,9 @@ class MainActivity : ComponentActivity() {
         CustomIcons.init(this)
         AerialSettings.init(this)
         Sounds.init(this)
+        // Raised before anything else that has to survive a background stop: with the process held
+        // up, the firmware's sweeper (which only takes "empty" processes) never comes for it.
+        KeepAliveService.start(applicationContext)
 
         // A phone that keeps the remote page in its bookmarks has to find it without anyone
         // walking over to the TV to show a QR code, so the page comes up with Aerial. Off the main

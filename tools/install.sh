@@ -184,6 +184,9 @@ adb shell pm grant "$PKG" android.permission.ACCESS_FINE_LOCATION 2>/dev/null ||
 adb shell pm grant "$PKG" android.permission.WRITE_SECURE_SETTINGS 2>/dev/null || true  # keep Home Guard (and ADB) on
 adb shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow 2>/dev/null || true             # open Aerial after boot
 adb shell appops set "$PKG" WRITE_SETTINGS allow 2>/dev/null || true                  # brightness
+# The keep-alive service's notification. IMPORTANCE_MIN, so it can never raise a banner over what
+# the viewer is watching; without this grant Android 13 just leaves the drawer entry out.
+adb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true    # keep-alive notice
 adb shell cmd notification allow_listener "$PKG/$PKG.guard.RevivalListener" 2>/dev/null || true  # come back after a kill
 # Android 9 on Xiaomi MiTV-MFTP0 reports success but never binds it (issue #72): low-RAM devices
 # get no notification listeners at all. Aerial's sync adapter brings it back there instead, later.

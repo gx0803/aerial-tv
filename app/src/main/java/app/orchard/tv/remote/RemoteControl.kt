@@ -112,6 +112,63 @@ object RemoteControl {
         return true
     }
 
+    /**
+     * Opens the firmware's own brightness bar, on the remote's side-key route.
+     *
+     * On a projector like the Dangbei D7XPG there is no Android channel to the light engine at all:
+     * /sys/class/backlight is empty, the 1..10 slider writes nothing to Settings or to a system
+     * property, and `screen_brightness` moves what Android draws without moving the lamp. The
+     * number that does reach the lamp belongs to the vendor's own HAL service
+     * (xgimi.hardware.gmpf.IDisplayManager), which no app is given a way to call.
+     *
+     * What the firmware does answer to is its own panel. The remote's side key opens it — Linux key
+     * 64, which Vendor_1d5a_Product_c081.kl maps to KEYCODE_MOVE_HOME (122) and *not* to
+     * KEYCODE_F6, so going by Generic.kl here gets nothing. Brightness is the third tile and OK
+     * opens its slider, which then answers Left and Right like any other key.
+     *
+     * The bar stays up until someone presses Back, so the page hands the keys back to the viewer
+     * straight away and does not send one itself: a Back on Aerial's home screen starts the
+     * screensaver, and in another app it would navigate away.
+     */
+    fun openBrightness(): Boolean {
+        if (!AdbBridge.connected) return false
+        return AdbBridge.run(
+            "input keyevent ${KeyEvent.KEYCODE_MOVE_HOME}" +
+                "; sleep 1" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_RIGHT}" +
+                "; sleep 0.4" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_RIGHT}" +
+                "; sleep 0.4" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_CENTER}",
+        )
+    }
+
+    /**
+     * Walks the firmware's panel to its HDMI list, without choosing one.
+     *
+     * Same reasoning as [openBrightness]: the inputs are listed by the TV input framework
+     * (com.xgimi.tvinput registers HDMI 1-3) but the passthrough Intent no app on this projector
+     * answers, and the session that actually shows an input belongs to com.xgimi.xhplayer, a system
+     * app. The panel is the one route that works, so only the walk up to the list is sent here and
+     * the choice is left to the viewer: OK alone is HDMI 1, Down then OK is HDMI 2, on the page's
+     * own keys.
+     *
+     * Side key (122) to open it, Down off the top row (which lands on 图像模式), Right to 输入源,
+     * and OK, which is what raises the source list - without that last press nothing appears.
+     */
+    fun openInputSource(): Boolean {
+        if (!AdbBridge.connected) return false
+        return AdbBridge.run(
+            "input keyevent ${KeyEvent.KEYCODE_MOVE_HOME}" +
+                "; sleep 1" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_DOWN}" +
+                "; sleep 0.4" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_RIGHT}" +
+                "; sleep 0.4" +
+                "; input keyevent ${KeyEvent.KEYCODE_DPAD_CENTER}",
+        )
+    }
+
     fun hasKeyboard(): Boolean = RemoteService.instance != null
 
     /** True when keys can reach another app at all: through the shell, or Home/Back through access. */

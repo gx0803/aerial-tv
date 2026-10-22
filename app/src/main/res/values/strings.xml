@@ -5,6 +5,9 @@
     <string name="guard_description">Keeps Aerial as your home screen on TVs that do not let you change it. Reads no screen content.</string>
     <string name="remote_name">Aerial 手机遥控</string>
     <string name="remote_description">Lets the phone page press Home and Back outside Aerial, and write into the text field that has focus. Used only while the phone page is open.</string>
+    <string name="keep_alive_channel">后台保持</string>
+    <string name="keep_alive_title">Aerial</string>
+    <string name="keep_alive_text">保持桌面与手机遥控在线</string>
 
     <string name="greeting_morning">Good morning</string>
     <string name="greeting_afternoon">Good afternoon</string>

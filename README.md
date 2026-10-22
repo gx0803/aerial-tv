@@ -34,7 +34,7 @@
 >
 > **首先要郑重感谢原作者 [@pengchujin](https://github.com/pengchujin)。** Aerial 是一份完成度高得惊人的作品：tvOS 风格的桌面、航拍屏保、给国产电视做的各种适配，全部以 MIT 协议开源。没有这个项目和作者长期维护的机型适配笔记，后面的定制根本无从谈起。原项目的所有设计、实现与文档成果归原作者所有，本分支只是在其之上针对自家设备（当贝 D7XPG 投影，Android 13，mt5873，固件内含 `com.xgimi.*` 框架组件与当贝桌面）做了一些增删改，**所有定制内容同样以 MIT 协议开放**，并且欢迎回流给上游。
 >
-> 定制内容集中在 `custom-1.48` 分支，main 保持与上游一致。改动清单见下方「[本分支的改动](#本分支的改动)」。
+> 定制内容集中在 `custom-1.52` 分支，main 保持与上游一致。改动清单见下方「[本分支的改动](#本分支的改动)」。
 
 ## 功能
 
@@ -250,10 +250,12 @@ BUILD=1 KEEP_ADB=1 TV=<电视IP> tools/install.sh      # 用本地编译的 APK 
 
 - **手机遥控页（可跨应用操作）**：`remote/` 包 + `assets/web/remote.html`。手机浏览器打开一个固定地址就能遥控电视。为突破「无障碍服务只能做 HOME/BACK」的限制，`AdbBridge` 直接实现 adb 原生协议连本机 adbd，用 `input keyevent` 把按键注入到**当前焦点窗口**，所以方向键和 OK 在任意 App 内都有效。
 - **打字、退格、清空、输入历史**：通过 `RemoteService` 的 `ACTION_SET_TEXT` 写入当前焦点输入框（中英文均可，比逐字符注入更可靠）；退格支持长按连删；历史记录存在**电视端**（换手机打开也还在），按时间降序，可删单条也可全部清空。
+- **手机遥控页的「亮度调节」按钮**：当贝 D7XPG 这类投影的光机亮度不在任何 Android 通道上（见下方固件限制），因此改为**复现遥控器侧键的那条路**——注入 `KEYCODE_MOVE_HOME`(122) 打开固件快捷面板（`com.dangbei.lerad.etna`），右两下到「亮度」，确定进入亮度条，之后左右键即可调节，调完点「返回」收起。注意侧键在 `Vendor_1d5a_Product_c081.kl` 里被映射成 `MOVE_HOME` 而**不是** `KEYCODE_F6`(132)，照 `Generic.kl` 推断会毫无反应。
 - **工具页**（控制中心 → 工具）：跑马灯边框主题切换、测试图、氛围光。
 - **农历**：`system/Lunar.kt`，查表法覆盖 2020–2050，日期行追加「· 九月十三」。
 - **配置备份**：`/api/config/export` 与 `/api/config/import`，设置以 JSON 往返。
 - **夜间模式**：本机亮度通道写 `screen_brightness` 不生效，改为半透明遮盖层。
+- **后台保活前台服务**：`guard/KeepAliveService.kt`。当贝 D7XPG 的固件只清理 `cached=true` / `state=CEM`（cached-empty）的进程，前台服务能把 Aerial 从这个分类里挪出来（实测 `dumpsys activity oom` 由 cached 变为 `cached=false`、`state=BFGS`）。通知走 `IMPORTANCE_MIN` 通道（`vis=SECRET`、无声音无振动、不显示角标），系统把它夹到 `LOW`，**不会弹横幅遮挡正在看的内容**，只在通知抽屉里留一条。Android 14+ 声明为 `specialUse` 类型。
 
 ### 优化
 
@@ -276,6 +278,15 @@ BUILD=1 KEEP_ADB=1 TV=<电视IP> tools/install.sh      # 用本地编译的 APK 
 本机（当贝 D7XPG，Android 13，mt5873）的固件会在 `system_server` 内部定时 force-stop 后台应用，`dumpsys activity exit-info` 里表现为 `reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) ... from pid 783`。它与内存无关——最后一次被杀时进程只占 11 MB。VidHub 这类普通应用同样会被杀，所以不是针对某个桌面。
 
 后果是：遥控页随进程消失，靠上面的自愈约 5 秒内恢复；退出 App 时会有约 1 秒的当贝桌面闪现。应用层无法免疫（已实测电池优化白名单与后台运行 AppOp 都拦不住，独立进程也不行，因为 force-stop 是整包级），只能把影响压到最短。真要消除需要 root 后禁用固件里的对应组件。
+
+排查过程中另外确认的几件事，供后来者少走弯路：
+
+- **屏保会掩盖问题**：屏保里 `DreamActivity` 处于 resumed，Aerial 是前台进程（`oom_score_adj = 0`），固件不会碰它。屏保不会自己退出，必须遥控器任意键。所以「盯着不动做稳定性采样」得到的零击杀是假象。
+- **固件的清理目标是 `state=empty` 且 `cached=true` 的进程**，不是内存大户。同一个 `from pid 783` 的策略至今仍在杀别的包（`com.android.permissioncontroller`、`com.yunpan.appmanage:acc`），只是不再选中 Aerial。
+- **`pm grant` 无法越过签名校验**：`FORCE_STOP_PACKAGES` 报 `not a changeable permission type`，`CHANGE_COMPONENT_ENABLED_STATE` / `MANAGE_APP_OPS_MODES` 报 `is managed by role`。Aerial 拿到的 `WRITE_SECURE_SETTINGS` 是因为该权限带 `appop` 标志，走的是 AppOps 通道。
+- **Android 13 起 shell 不能改组件状态**：`pm disable <pkg>/.SomeService` 报 `Shell cannot change component state`，所以「停用固件嫌疑组件」这条路在没有 root 时也不通。
+- **「应用管家」那类工具靠的是 Shizuku**：它装在 `/data/app`、`userId=10055`、`pkgFlags` 为空，是普通三方应用；dex 里 `shizuku` 命中 63 次，实现方式是 `settings get global adb_enabled` 这类 shell 命令经 Shizuku 以 uid 2000 执行，等价于我们已有的 adb 权限，没有额外特权。
+- **投影的光机亮度没有 Android 通道**：`/sys/class/backlight/` 为空（投影没有传统背光），固件 1–10 档的亮度滑条在调节时**不写任何 Settings 或系统属性**（2 分 20 秒监控零变化），写 `screen_brightness` 只改变 Android 合成层的 `Display Brightness` 而画面不变。真正的落点是厂商 HAL 服务 `xgimi.hardware.gmpf.IDisplayManager`。所以 Aerial 控制中心的亮度滑块在这台机上无效（代码不报错，只是光机不响应），遥控页改用上面那个「亮度调节」按钮走固件自己的界面。
 
 ## 许可
 

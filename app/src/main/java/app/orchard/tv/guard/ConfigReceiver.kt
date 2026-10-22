@@ -32,6 +32,11 @@ class ConfigReceiver : BroadcastReceiver() {
             AerialSettings.init(context)
             AerialSettings.choosePin(null)
         }
+        // ... --ez one_row_home false   (the one-row Home from Personalize, set from a computer)
+        if (intent.hasExtra("one_row_home")) {
+            AerialSettings.init(context)
+            AerialSettings.chooseOneRowHome(intent.getBooleanExtra("one_row_home", true))
+        }
         if (intent.hasExtra("keep_adb")) GuardSetup.setKeepAdb(context, intent.getBooleanExtra("keep_adb", false))
         if (intent.hasExtra("own_screensaver")) GuardSetup.setOwnScreensaver(context, intent.getBooleanExtra("own_screensaver", false))
         GuardSetup.ensureEnabled(context)

@@ -2,13 +2,13 @@ package app.orchard.tv.ui.home
 
 import android.text.format.DateFormat
 import android.graphics.BitmapShader
-import android.graphics.ComposeShader
-import android.graphics.PorterDuff
 import android.graphics.Matrix
 import android.graphics.Shader
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.FilterQuality
@@ -43,12 +44,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import app.orchard.tv.system.Lunar
 import app.orchard.tv.system.NetKind
 import app.orchard.tv.system.NetworkStatus
 import app.orchard.tv.ui.components.Pressable
-import app.orchard.tv.ui.components.frozen
-import app.orchard.tv.ui.components.glassEdge
-import app.orchard.tv.ui.components.smoothMask
+import app.orchard.tv.ui.components.drawGlassEdge
 import app.orchard.tv.ui.theme.Glyph
 import app.orchard.tv.ui.theme.GlyphIcon
 import app.orchard.tv.ui.theme.Motion
@@ -85,7 +85,8 @@ fun timeText(now: LocalDateTime): String {
 @Composable
 fun dateText(now: LocalDateTime): String {
     val locale = Locale.getDefault()
-    val pattern = remember(locale) { DateFormat.getBestDateTimePattern(locale, "MMMMdEEEE") }
+    // The year leads the date ("2026年10月22日星期四"); ICU decides where it belongs per locale.
+    val pattern = remember(locale) { DateFormat.getBestDateTimePattern(locale, "yMMMMdEEEE") }
     return now.format(DateTimeFormatter.ofPattern(pattern, locale))
 }
 
@@ -103,7 +104,7 @@ fun dateText(now: LocalDateTime): String {
  * full-screen fill (Xiaomi MiTV-MFTR0: 90th percentile 20 -> 30 ms when the crossfade ran end to end).
  */
 @Composable
-fun HomeBackground(backdrop: ImageBitmap?, frosted: ImageBitmap?, plate: Rect?, scroll: () -> Float, collapse: Float) {
+fun HomeBackground(backdrop: ImageBitmap?, frosted: ImageBitmap?, plates: List<Rect>, scroll: () -> Float, collapse: Float) {
     Crossfade(
         targetState = backdrop to frosted,
         animationSpec = tween(450, easing = Motion.EaseOut),
@@ -114,13 +115,11 @@ fun HomeBackground(backdrop: ImageBitmap?, frosted: ImageBitmap?, plate: Rect?, 
         // already, so it makes the glass itself.
         val glassSrc = frost ?: bmp
         val dark = remember(glassSrc) { glassSrc?.let { darkened(it, GRID_SHADE) } }
-        val plateSrc = remember(glassSrc) { glassSrc?.let { plateTinted(it) } }
         // The shader stretching the glass over the screen; made once per size, outside state,
         // since it is made while drawing.
         val shaderFor = remember(glassSrc) { arrayOfNulls<Pair<Size, Shader>>(1) }
-        val outlineFor = remember { arrayOfNulls<Pair<IntSize, Pair<Shader, Shader>>>(1) }
         Canvas(Modifier.fillMaxSize()) {
-            if (bmp == null || glassSrc == null || dark == null || plateSrc == null) {
+            if (bmp == null || glassSrc == null || dark == null) {
                 drawRect(Color.Black)
                 return@Canvas
             }
@@ -132,45 +131,32 @@ fun HomeBackground(backdrop: ImageBitmap?, frosted: ImageBitmap?, plate: Rect?, 
             if (g < 0.99f) drawImage(bmp, dstSize = full, filterQuality = FilterQuality.Low)
             if (g > 0.01f) drawImage(dark, dstSize = full, filterQuality = FilterQuality.Low, alpha = g)
 
-            // The plate rides with its row and dissolves into the frosted background: it fades
-            // over the first half of the scroll, swelling a little as if lifting off, and settles
-            // back the same way when focus returns to the top row. Kept small on purpose: the
-            // whole screen shrinking back into the plate read as too much.
-            val fade = 1f - smooth((p / 0.55f).coerceIn(0f, 1f))
-            if (plate == null || fade < 0.01f) return@Canvas
+            // One plate around the whole grid, and it stays put while the rows scroll over it: a
+            // surface the tiles sit on does not thin out or lift off when the focus moves down.
+            if (plates.isEmpty()) return@Canvas
             val radius = PlateCorner.toPx()
-            val grow = PlateSwell.toPx() * (1f - fade)
-            val r = plate.translate(0f, -scroll()).inflate(grow)
             val shader = shaderFor[0]?.takeIf { it.first == size }?.second ?: BitmapShader(
-                plateSrc.asAndroidBitmap(), android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP,
+                glassSrc.asAndroidBitmap(), android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP,
             ).apply {
-                setLocalMatrix(Matrix().apply { setScale(size.width / plateSrc.width, size.height / plateSrc.height) })
+                setLocalMatrix(Matrix().apply { setScale(size.width / glassSrc.width, size.height / glassSrc.height) })
             }.also { shaderFor[0] = size to it }
-            // The continuous outline is a mask, and the lit edge a picture, both made at the
-            // plate's resting size and stretched as it swells. Glass, mask and edge go in one
-            // rect: drawn apart they cost the GPU 3ms more a frame than the plain rounded plate.
-            val w = plate.width.roundToInt()
-            val h = plate.height.roundToInt()
-            val (outline, edge) = outlineFor[0]?.takeIf { it.first == IntSize(w, h) }?.second ?: Pair<Shader, Shader>(
-                BitmapShader(smoothMask(w, h, radius), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
-                BitmapShader(glassEdge(w, h, radius, 1.2.dp.toPx()).asAndroidBitmap(), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
-            ).also { outlineFor[0] = IntSize(w, h) to it }
-            val toPlate = Matrix().apply { setScale(r.width / w, r.height / h); postTranslate(r.left, r.top) }
-            outline.setLocalMatrix(toPlate)
-            edge.setLocalMatrix(toPlate)
-            drawRect(
-                ShaderBrush(ComposeShader(ComposeShader(shader, outline, PorterDuff.Mode.DST_IN), edge, PorterDuff.Mode.SRC_OVER)),
-                topLeft = r.topLeft,
-                size = r.size,
-                alpha = fade,
-            )
+            plates.forEach { plate ->
+                val r = plate.translate(0f, -scroll())
+                drawRoundRect(
+                    ShaderBrush(shader),
+                    topLeft = r.topLeft,
+                    size = r.size,
+                    cornerRadius = CornerRadius(radius),
+                    alpha = 1f,
+                    colorFilter = PlateTint,
+                )
+                drawGlassEdge(r.topLeft, r.size, radius, 1f)
+            }
         }
     }
 }
 
-private fun smooth(x: Float) = x * x * (3f - 2f * x)
-
-/** The Liquid Glass plate under the top row: how far it reaches past the tiles, and its corners. */
+/** The Liquid Glass plate around the grid: how far it reaches past the tiles, and its corners. */
 val PlatePadH = 26.dp
 val PlatePadV = 20.dp
 private val PlateCorner = 32.dp
@@ -178,24 +164,13 @@ private val PlateCorner = 32.dp
 /** The grid's background: the frosted picture under this much black. */
 private const val GRID_SHADE = 0.55f
 
-/** How much the plate swells as it dissolves into the grid's background. */
-private val PlateSwell = 14.dp
-
 /** The plate's tint: the frosted picture a little darker, lifted with white, so it reads as milky glass. */
-private val PlateTint = floatArrayOf(
+private val PlateTint = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
     0.8f, 0f, 0f, 0f, 30f,
     0f, 0.8f, 0f, 0f, 30f,
     0f, 0f, 0.8f, 0f, 30f,
     0f, 0f, 0f, 1f, 0f,
-)
-
-/** The glass picture with the plate's tint applied ahead of time, so the plate is one plain draw. */
-private fun plateTinted(src: ImageBitmap): ImageBitmap {
-    val out = src.asAndroidBitmap().copy(android.graphics.Bitmap.Config.ARGB_8888, true)
-    val paint = android.graphics.Paint().apply { colorFilter = android.graphics.ColorMatrixColorFilter(PlateTint) }
-    android.graphics.Canvas(out).drawBitmap(src.asAndroidBitmap(), 0f, 0f, paint)
-    return out.frozen().asImageBitmap()
-}
+)))
 
 /** A small picture darkened ahead of time, so the grid's background costs no tint per frame. */
 private fun darkened(src: ImageBitmap, alpha: Float): ImageBitmap {
@@ -213,7 +188,9 @@ fun ShelfClock(now: LocalDateTime, modifier: Modifier = Modifier, alignEnd: Bool
     val dim = Color.White.copy(alpha = 0.86f)
     Column(modifier, horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            BasicText(dateText(now), style = Type.Title.copy(color = dim))
+            // The lunar date rides along after the Gregorian one, when the table covers the year.
+            val lunar = Lunar.of(now.toLocalDate())?.let { " · ${it.label}" } ?: ""
+            BasicText(dateText(now) + lunar, style = Type.Title.copy(color = dim))
             Weather.now?.let { w ->
                 GlyphIcon(glyphFor(w), dim, 22.dp, Modifier.padding(start = 18.dp, end = 6.dp))
                 val place = Weather.place?.takeIf { it.length <= 12 }
@@ -225,7 +202,7 @@ fun ShelfClock(now: LocalDateTime, modifier: Modifier = Modifier, alignEnd: Bool
 }
 
 /**
- * The small clock: the time and the weather in one quiet line in the top left, level with the status
+ * One-row Home: the time and the weather in one quiet line in the top left, level with the status
  * pill, so the wallpaper keeps the rest of the screen. A soft shadow keeps it readable on photos.
  */
 @Composable

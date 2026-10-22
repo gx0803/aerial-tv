@@ -2,6 +2,7 @@ package app.orchard.tv
 
 import android.app.ActivityOptions
 import android.content.BroadcastReceiver
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -40,12 +41,16 @@ import app.orchard.tv.apps.CustomIcons
 import app.orchard.tv.apps.TileArtFactory
 import app.orchard.tv.guard.GuardSetup
 import app.orchard.tv.guard.HomeGuardService
+import app.orchard.tv.remote.RemoteControl
+import app.orchard.tv.remote.RemoteKey
 import app.orchard.tv.ui.home.HomeScreen
 import app.orchard.tv.ui.theme.LocalReducedMotion
 import app.orchard.tv.ui.theme.canvasDensity
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.wallpaper.PhoneServer
 import app.orchard.tv.wallpaper.Wallpapers
 import app.orchard.tv.system.MissingClipboard
+import app.orchard.tv.system.RunTime
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.system.SystemProbe
 import app.orchard.tv.system.settingsLaunchIntent
@@ -73,7 +78,6 @@ class MainActivity : ComponentActivity() {
             vm.refreshNetwork()
             Wallpapers.refreshDailyIfStale(networkCameUp = true)
             Weather.refreshIfStale(networkCameUp = true)
-            Updates.checkIfStale()
         }
         override fun onLost(network: Network) = runOnUiThread { vm.refreshNetwork() }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = runOnUiThread { vm.refreshNetwork() }
@@ -92,11 +96,25 @@ class MainActivity : ComponentActivity() {
         }
         TileArtFactory.useCanvasDensity(canvasDensity(resources.displayMetrics))
         Wallpapers.init(this)
+        RunTime.init(this)
         Weather.init(this)
         Updates.init(this)
         CustomIcons.init(this)
         AerialSettings.init(this)
         Sounds.init(this)
+
+        // A phone that keeps the remote page in its bookmarks has to find it without anyone
+        // walking over to the TV to show a QR code, so the page comes up with Aerial. Off the main
+        // thread: it binds a socket, and the first frame should not wait for that.
+        Thread {
+            runCatching { PhoneServer.boot(applicationContext) }
+                .onFailure { android.util.Log.w("Aerial", "remote page did not come up", it) }
+            // Two launchers and no choice made: Home would show a chooser and Back would land on
+            // the stock one, which reads as Aerial having quit. Done once, over the same shell.
+            runCatching { GuardSetup.claimHome(applicationContext) }
+            // This firmware stops background apps on a timer of its own; ask it not to.
+            runCatching { GuardSetup.holdBackground(applicationContext) }
+        }.start()
         val reducedMotion = Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
 
         // The home screen paints every pixel itself; a window background would be one more
@@ -212,6 +230,9 @@ class MainActivity : ComponentActivity() {
 
     private val idleHandler = Handler(Looper.getMainLooper())
     private val showScreensaver = Runnable {
+        // A tool page owns the screen; the screensaver must not paint over a test picture or a
+        // blackout the owner asked for.
+        if (vm.tool != Tool.None) return@Runnable
         vm.screensaverVisible = true
         // Holding the screen on keeps the firmware's screensaver from starting over ours. After a
         // long stretch, let go so the TV's own power policy can still turn the panel off.
@@ -227,7 +248,49 @@ class MainActivity : ComponentActivity() {
 
     private fun restartIdleTimer() {
         idleHandler.removeCallbacks(showScreensaver)
+        if (vm.tool != Tool.None) return
         idleHandler.postDelayed(showScreensaver, idleBeforeScreensaver())
+    }
+
+    /**
+     * A tool page (Control Center > Tools) answers the remote itself: on the test pictures
+     * Left/Right steps through them, in Ambient they change the scene with Back to leave, and a
+     * blackout ends on any key. Volume keys still go through, so the room can be turned down.
+     */
+    private fun handleToolKey(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_MUTE) return false
+        val down = event.action == KeyEvent.ACTION_DOWN
+        when (vm.tool) {
+            Tool.TestPattern -> if (down) when (code) {
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> vm.testPattern++
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> vm.testPattern--
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_HOME -> vm.tool = Tool.None
+                else -> Unit
+            }
+            Tool.Ambient -> if (down) when (code) {
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> vm.ambientScene++
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> vm.ambientScene--
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_HOME -> vm.tool = Tool.None
+                else -> Unit
+            }
+            Tool.Blackout -> if (down) vm.tool = Tool.None
+            // The phone page has nothing to navigate with the TV remote; Back leaves it.
+            Tool.Remote -> if (down && (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_HOME)) vm.tool = Tool.None
+            Tool.None -> return false
+        }
+        return true
+    }
+
+    /**
+     * A key from the phone's page, delivered as the remote's own would be. Nothing here fakes a
+     * system-wide input event — the press exists only inside Aerial, which is why the page says
+     * directions work on its screens and, in other apps, only Home and Back do.
+     */
+    private fun pressKey(key: RemoteKey) {
+        val at = SystemClock.uptimeMillis()
+        dispatchKeyEvent(KeyEvent(at, at, KeyEvent.ACTION_DOWN, key.code, 0))
+        dispatchKeyEvent(KeyEvent(at, at, KeyEvent.ACTION_UP, key.code, 0))
     }
 
     /**
@@ -249,6 +312,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (vm.tool != Tool.None) return handleToolKey(event)
         restartIdleTimer()
         // The key that wakes the screensaver only wakes it, silently.
         if (!vm.screensaverVisible && event.keyCode != swallowKeyUp) Sounds.onKey(event)
@@ -332,6 +396,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         restartIdleTimer()
+        RunTime.onFront()
+        // Decoded again if it was let go in onTrimMemory while another app had the screen.
+        Wallpapers.ensurePictures()
+        // From here until onPause the phone's page presses real keys through Aerial's own dispatch,
+        // so the grid, Control Center and the tools answer it exactly as they answer the remote.
+        RemoteControl.attach(::pressKey)
         GuardSetup.setHomeInFront(this, true)
         HomeGuardService.onAerialResumed()
         vm.refreshSystem()
@@ -342,6 +412,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        RemoteControl.detach()
+        RunTime.onHidden()
         GuardSetup.setHomeInFront(this, false)
         idleHandler.removeCallbacks(showScreensaver)
         hideScreensaver()
@@ -352,6 +424,19 @@ class MainActivity : ComponentActivity() {
         unregisterReceiver(packageReceiver)
         unregisterReceiver(volumeReceiver)
         runCatching { getSystemService<ConnectivityManager>()?.unregisterNetworkCallback(networkCallback) }
+    }
+
+    /**
+     * Hand the full-screen pictures back once nothing of Aerial is on screen.
+     *
+     * On this TV (1.8 GB, a firmware that force-stops the biggest background app) two 1920x1080
+     * bitmaps and their GPU copies were enough to have Aerial killed while another app was only
+     * opening a text box, which took Home and the phone's page down with it. Nothing is drawn at
+     * this point, so letting them go costs nothing on screen.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) Wallpapers.releasePictures()
     }
 
     /** Opens an app, growing it out of its tile. */

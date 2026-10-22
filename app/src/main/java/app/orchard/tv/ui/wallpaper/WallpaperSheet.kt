@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -61,8 +62,6 @@ import androidx.compose.ui.unit.dp
 import app.orchard.tv.R
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.settings.FocusStyle
-import app.orchard.tv.settings.UiSounds
-import app.orchard.tv.system.Sounds
 import app.orchard.tv.ui.components.Pressable
 import app.orchard.tv.ui.components.consumeTaps
 import app.orchard.tv.ui.components.dismissOnTap
@@ -100,6 +99,7 @@ fun WallpaperSheet(
     onPin: (on: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     var phoneUrl by remember { mutableStateOf<String?>(null) }
     var qr by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -111,7 +111,9 @@ fun WallpaperSheet(
         if (visible) {
             val url = withContext(Dispatchers.IO) { PhoneServer.start(context) }
             phoneUrl = url
-            qr = url?.let { withContext(Dispatchers.Default) { PhoneServer.qr(it).asImageBitmap() } }
+            // The card is 176 dp with 14 dp of white around the code; size the bitmap for that.
+            val px = with(density) { 148.dp.toPx() }.roundToInt()
+            qr = url?.let { withContext(Dispatchers.Default) { PhoneServer.qr(it, px).asImageBitmap() } }
         } else {
             delay(5 * 60 * 1000L)
             withContext(Dispatchers.IO) { PhoneServer.stop() }
@@ -160,24 +162,9 @@ fun WallpaperSheet(
                             AerialSettings.oneRowHome, AerialSettings::chooseOneRowHome, first = true,
                         )
                         Choices(
-                            R.string.st_plate, stringResource(R.string.st_plate_hint), note,
-                            listOf(true to R.string.st_plate_glass, false to R.string.st_plate_none),
-                            AerialSettings.homePlate, AerialSettings::chooseHomePlate,
-                        )
-                        Choices(
                             R.string.st_clock, stringResource(R.string.st_clock_hint), note,
                             listOf(false to R.string.st_clock_left, true to R.string.st_clock_right),
                             AerialSettings.clockRight, AerialSettings::chooseClockRight,
-                        )
-                        Choices(
-                            R.string.st_clock_size, stringResource(R.string.st_clock_size_hint), note,
-                            listOf(false to R.string.st_clock_small, true to R.string.st_clock_large),
-                            AerialSettings.largeClock, AerialSettings::chooseLargeClock,
-                        )
-                        Choices(
-                            R.string.st_names, stringResource(R.string.st_names_hint), note,
-                            listOf(false to R.string.st_names_focused, true to R.string.st_names_all),
-                            AerialSettings.showAllNames, AerialSettings::chooseShowAllNames,
                         )
                         Choices(
                             R.string.st_focus_style,
@@ -187,11 +174,9 @@ fun WallpaperSheet(
                             AerialSettings.focusStyle, AerialSettings::chooseFocusStyle,
                         )
                         Choices(
-                            R.string.st_sounds,
-                            stringResource(if (AerialSettings.uiSounds == UiSounds.Tv) R.string.st_sounds_tv_hint else R.string.st_sounds_hint),
-                            note,
-                            listOf(UiSounds.Tv to R.string.st_sounds_tv, UiSounds.Aerial to R.string.st_sounds_aerial, UiSounds.Off to R.string.st_off),
-                            AerialSettings.uiSounds, { AerialSettings.chooseUiSounds(it); Sounds.prepare() },
+                            R.string.st_sounds, stringResource(R.string.st_sounds_hint), note,
+                            listOf(true to R.string.st_on, false to R.string.st_off),
+                            AerialSettings.uiSounds, AerialSettings::chooseUiSounds,
                         )
                         // Apps taken off Home are kept with the rest of how Home looks.
                         SettingRow(R.string.st_hidden_apps, stringResource(R.string.st_hidden_apps_hint), note) {

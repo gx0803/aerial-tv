@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.getSystemService
 import app.orchard.tv.MainActivity
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.wallpaper.PhoneServer
 
 /**
  * Keeps Aerial as the home screen on firmwares that will not let a third-party app own HOME
@@ -112,6 +113,16 @@ class HomeGuardService : AccessibilityService() {
             Log.i(TAG, "bound while user locked; deferred takeover until unlock")
             return
         }
+        // The phone's remote page is served from this process, and this process is the one the
+        // firmware keeps stopping. Booting the page from the binding as well as from MainActivity
+        // means it comes back by itself after a kill even when the new process is never asked to
+        // show the home screen — which is exactly what happened when Aerial was stopped while
+        // another app was in front (the page stayed dead until someone opened Aerial by hand).
+        Thread {
+            runCatching { PhoneServer.boot(applicationContext) }
+                .onFailure { Log.w(TAG, "the remote page did not come up", it) }
+            runCatching { GuardSetup.holdBackground(applicationContext) }
+        }.start()
         // Bound a little after boot, or brought back after the firmware killed Aerial: either way
         // the stock launcher is what's in front, and the window change that showed it is long gone.
         // Not after an update, though: installing over Aerial also kills it, and whoever is watching
@@ -260,24 +271,27 @@ class HomeGuardService : AccessibilityService() {
         // Only activities count as what is in front. Overlays and dialogs also raise this event:
         // TCL's voice assistant (com.tcl.walleve) does at boot on TCL 75S365C, and taking it for
         // an app the viewer chose kept the guard from taking over (PR #45).
-        val before = lastWindow?.first
         if (isActivity(pkg, cls)) lastWindow = pkg to cls
         if (!GuardSetup.isUserUnlocked(this)) return
         val allowed = SystemClock.uptimeMillis() < allowStockUntil
+        // XGIMI's firmware answers Home with its own "open with" chooser whenever two launchers are
+        // installed and neither was chosen, and it greys out both "just once" and "always", so there
+        // is no way to make the choice. While that chooser is up, Home does nothing and Back lands
+        // on the stock launcher — which is exactly the state the guard exists to get out of.
+        if (pkg in CHOOSER_PACKAGES && cls.contains("ResolverActivity", ignoreCase = true)) {
+            if (allowed) return
+            Log.i(TAG, "the firmware's launcher chooser came to the front; bringing Aerial back")
+            goHome()
+            return
+        }
         if (pkg in stockHomes) {
             filterKeys(allowed)
             // Only the stock launcher's home activity itself, not its dialogs or other screens.
-            // Not gated on isDefaultHome(): see takeOverIfStockHomeInFront.
-            if (cls !in stockHomes.getValue(pkg) || allowed) return
-            // Switching inputs passes through the stock launcher on Skyworth: the TV service starts
-            // its SkyLauncher, the launcher shows for a moment, then the input. Taking Home at once
-            // aborted the switch (Skyworth 8H26_M9, Android 5.1, issues #108, #155). Look again
-            // once it has settled; the input will be in front by then.
-            if (before in SOURCE_SWITCHERS || pkg in SOURCE_SWITCHERS) {
-                Log.i(TAG, "stock home $pkg came to the front during an input switch; looking again shortly")
-                takeOverOnceSettled("after an input switch", woke = false)
-                return
-            }
+            // Not gated on isDefaultHome(): see takeOverIfStockHomeInFront. Its own splash counts:
+            // Dangbei's launcher opens on .ui.splash.SplashActivity (this TV), so the window that
+            // comes to the front is never the activity its HOME filter names.
+            if (allowed) return
+            if (cls !in stockHomes.getValue(pkg) && !isLauncherEntry(cls)) return
             Log.i(TAG, "stock home $pkg came to the front; bringing Aerial back")
             // Shortly after the screen lit, this is the wake itself (issue #111).
             goHome(woke = SystemClock.elapsedRealtime() - screenOnAt < WAKE_WINDOW_MS)
@@ -297,6 +311,9 @@ class HomeGuardService : AccessibilityService() {
     /** True for packages with a launcher entry, i.e. apps rather than system overlays and dialogs. */
     private fun isApp(pkg: String): Boolean =
         packageManager.getLeanbackLaunchIntentForPackage(pkg) != null || packageManager.getLaunchIntentForPackage(pkg) != null
+
+    /** A launcher's own splash/start page — the launcher came to the front, not a screen of it. */
+    private fun isLauncherEntry(cls: String): Boolean = cls.contains("Splash", ignoreCase = true)
 
     private fun isDefaultHome(): Boolean =
         packageManager.resolveActivity(
@@ -362,8 +379,9 @@ class HomeGuardService : AccessibilityService() {
 
         /** VIDAA's assistant and its launcher (聚好看), on the two VIDAA builds reported (issues #7, #40). */
         private val VIDAA_PACKAGES = listOf("com.hisense.vidaaassistant", "com.jamdeo.tv.vod")
-        /** TV services whose input switch shows the stock launcher on the way (Skyworth, #155). */
-        private val SOURCE_SWITCHERS = setOf("com.tianci.tv")
+
+        /** Firmwares that answer Home with a launcher chooser of their own instead of a default. */
+        private val CHOOSER_PACKAGES = setOf("com.xgimi.xgimiframeworkui")
         private const val VENDOR_HOME_PREFIX = "android.intent.category.HOME."
         private const val VENDOR_HOME_SUFFIX = "_HOME"
 
@@ -376,18 +394,6 @@ class HomeGuardService : AccessibilityService() {
         private var instance: HomeGuardService? = null
 
         val isRunning: Boolean get() = instance != null
-
-        /** Looks once more at boot completion; false if the guard is not running. */
-        fun onBootCompleted(): Boolean {
-            val s = instance ?: return false
-            s.handler.post {
-                // Aerial already in front: the take-over at bind time worked, and has opened the
-                // input the TV starts on if there is one.
-                if (s.lastWindow?.first == s.packageName) return@post
-                if (s.getSystemService<PowerManager>()?.isInteractive == true) s.takeOverOnceSettled("boot completed", woke = true)
-            }
-            return true
-        }
 
         /** True if [packageName] is a stock launcher the guard keeps away from the front. */
         fun isStockHome(packageName: String): Boolean = instance?.stockHomes?.containsKey(packageName) == true

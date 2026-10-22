@@ -86,6 +86,9 @@ object Wallpapers {
     var frosted by mutableStateOf<ImageBitmap?>(null); private set
 
     private var backdropJob: Job? = null
+
+    /** True while the pictures are let go and have to be decoded again. */
+    private var released = false
     private var started = false
 
     /** The UI's size in pixels. Pictures are decoded to it: 1080p on most TVs, 4K where the UI is. */
@@ -164,8 +167,34 @@ object Wallpapers {
         return b
     }
 
-    private fun rebuildBackdrop() {
+    /**
+     * Lets the full-screen pictures go while nothing of Aerial is on screen.
+     *
+     * Aerial is the launcher, so it spends most of its life behind another app. This TV has 1.8 GB
+     * of RAM and a firmware that force-stops whichever background app holds the most, and two
+     * 1920x1080 bitmaps plus their GPU copies put Aerial at the top of that list — which is what
+     * took Home, the phone's page and the adb shell down while VidHub was only opening a search
+     * box. Decoded again on the way back, in the time one scroll already takes.
+     */
+    fun releasePictures() {
+        if (backdrop == null && frosted == null) return
         backdropJob?.cancel()
+        backdrop = null
+        frosted = null
+        released = true
+        // The pixels live in native memory, handed back when the Java objects are collected and not
+        // when they go out of scope. Nothing is on screen here, so the pause costs nothing.
+        runCatching { Runtime.getRuntime().gc() }
+    }
+
+    /** Brings the pictures back after [releasePictures], if they were let go. */
+    fun ensurePictures() {
+        if (!released) return
+        released = false
+        rebuildBackdrop()
+    }
+
+    private fun rebuildBackdrop() {        backdropJob?.cancel()
         val id = selectedId
         backdropJob = scope.launch {
             if (id == AUTO) {

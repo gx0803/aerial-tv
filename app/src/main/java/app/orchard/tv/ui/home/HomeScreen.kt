@@ -18,6 +18,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
@@ -58,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -66,6 +68,7 @@ import app.orchard.tv.CcPage
 import app.orchard.tv.HomeViewModel
 import app.orchard.tv.Overlay
 import app.orchard.tv.R
+import app.orchard.tv.Tool
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.apps.AppEntry
 import app.orchard.tv.ui.control.ControlCenter
@@ -81,11 +84,8 @@ import kotlin.math.roundToInt
 
 private const val COLUMNS = 5
 
-/** Room under the tiles for every app's name, when all are shown. */
-private val NameRoom = 22.dp
-
 /** Grid geometry for the screen at hand. On a 1080p TV this is a 960×540 dp canvas. */
-private class GridMetrics(screenW: Dp, screenH: Dp, oneRow: Boolean, val nameRoom: Dp) {
+private class GridMetrics(screenW: Dp, screenH: Dp, oneRow: Boolean) {
     val margin = 56.dp
     val gap = 28.dp
     val tileW = (screenW - margin * 2 - gap * (COLUMNS - 1)) / COLUMNS
@@ -94,17 +94,17 @@ private class GridMetrics(screenW: Dp, screenH: Dp, oneRow: Boolean, val nameRoo
     val pitchY = tileH + 50.dp
 
     /**
-     * The top row sits a little past the middle, under the shelf, as on tvOS. In one-row mode, or
-     * when every app fits in it, it sits low, with only the top of any second row showing under
-     * the focused app's name. [nameRoom] is kept under the tiles when every name is shown.
+     * The top row sits under the shelf. In one-row mode it sits just past the middle rather than
+     * pinned to the bottom edge, and in the grid it starts above the middle; both were lowered
+     * before, which left the better part of the picture as dead space at the top.
      */
-    val topRowY = if (oneRow) screenH - pitchY - 12.dp - nameRoom else screenH * 0.555f
+    val topRowY = if (oneRow) screenH * 0.55f else screenH * 0.455f
 
-    /** Top of the large clock, just above the top row's plate. */
-    val clockY = topRowY - 196.dp
+    /** Top of the shelf clock, in the standard layout. Never level with the status pill. */
+    val clockY = if (oneRow) 0.dp else maxOf(screenH * 0.455f - 196.dp, 56.dp)
 
     /** Where a row rests once you go down into the grid: the row above stays in view. */
-    val restY = screenH * 0.37f
+    val restY = screenH * 0.27f
     val screenH = screenH
 
     fun slot(index: Int) = Pair(margin + pitchX * (index % COLUMNS), topRowY + pitchY * (index / COLUMNS))
@@ -134,15 +134,15 @@ fun HomeScreen(
     val now by rememberNow()
     val scope = rememberCoroutineScope()
 
+    // A tool page must not let the panel sleep or the firmware's screensaver fire.
+    val view = LocalView.current
+    LaunchedEffect(vm.tool) { view.keepScreenOn = vm.tool != Tool.None }
+
     val requesters = remember { HashMap<String, FocusRequester>() }
     fun requester(key: String) = requesters.getOrPut(key) { FocusRequester() }
     val pillRequester = remember { FocusRequester() }
 
     var focusedKey by remember { mutableStateOf<String?>(null) }
-    // Where focus goes when the overlay closes, when that is not the tile it was on. Kept apart
-    // from focusedKey: a closing menu hands focus to whatever tile lies under it first.
-    var focusAfterOverlay by remember { mutableStateOf<String?>(null) }
-    var indexAfterOverlay by remember { mutableStateOf(0) }
     var pillFocused by remember { mutableStateOf(false) }
     var lastFocusedIndex by remember { mutableStateOf(0) }
     val focusedIndex = apps.indexOfFirst { it.key == focusedKey }
@@ -164,19 +164,8 @@ fun HomeScreen(
     LaunchedEffect(vm.loaded, overlay) {
         if (!vm.loaded || overlay != Overlay.None) return@LaunchedEffect
         withFrameNanos { }
-        val wanted = focusAfterOverlay
-        focusAfterOverlay = null
-        if (wanted != null) { focusedKey = wanted; pillFocused = false }
         val index = apps.indexOfFirst { it.key == focusedKey }
-        // A tile that went while the overlay was up (hidden, put in a folder, a folder ungrouped)
-        // leaves focus where it was.
-        if (pillFocused && focusedKey != null) runCatching { pillRequester.requestFocus() }
-        else focusApp(if (index >= 0) index else if (wanted != null) indexAfterOverlay else lastFocusedIndex)
-    }
-    // A folder whose last app left closes.
-    LaunchedEffect(overlay, vm.folderApps) {
-        val open = (overlay as? Overlay.Folder)?.id ?: (overlay as? Overlay.AppMenu)?.inFolder ?: return@LaunchedEffect
-        if (vm.folderApps[open].isNullOrEmpty()) vm.overlay = Overlay.None
+        if (pillFocused && focusedKey != null) runCatching { pillRequester.requestFocus() } else focusApp(if (index >= 0) index else 0)
     }
     // An app vanished from under the focus (uninstalled or hidden): take its neighbour.
     LaunchedEffect(apps) {
@@ -245,8 +234,6 @@ fun HomeScreen(
                         // OK never reads as held had no other way to it (issue #28). Control
                         // Center stays one press up, on the status pill, where Menu still opens it.
                         if (overlay == Overlay.None && !pillFocused && focusedIndex >= 0) return@onPreviewKeyEvent false
-                        // Inside a folder, Menu is the focused app's, as on Home.
-                        if (overlay is Overlay.Folder) return@onPreviewKeyEvent false
                         vm.overlay = if (overlay is Overlay.ControlCenter) Overlay.None else Overlay.ControlCenter()
                         true
                     }
@@ -258,13 +245,10 @@ fun HomeScreen(
                 }
             },
     ) {
-        val rows = (apps.size + COLUMNS - 1) / COLUMNS
-        // With a single row of apps the two-row layout would leave the bottom of the screen empty.
-        val oneRow = AerialSettings.oneRowHome || rows <= 1
-        val nameRoom = if (AerialSettings.showAllNames) NameRoom else 0.dp
-        val metrics = remember(maxWidth, maxHeight, oneRow, nameRoom) {
-            GridMetrics(maxWidth, maxHeight, oneRow, nameRoom)
+        val metrics = remember(maxWidth, maxHeight, AerialSettings.oneRowHome) {
+            GridMetrics(maxWidth, maxHeight, AerialSettings.oneRowHome)
         }
+        val rows = (apps.size + COLUMNS - 1) / COLUMNS
         val collapsePx = with(density) { (metrics.topRowY - metrics.restY).toPx() }
 
         val target = with(density) { metrics.scrollFor(focusedRow, rows).toPx() }
@@ -279,10 +263,8 @@ fun HomeScreen(
             else scroll.animateTo(target, spring(dampingRatio = 1f, stiffness = 170f))
         }
 
-        // The folder open, or under its app's menu.
-        val openFolder = (overlay as? Overlay.Folder)?.id ?: (overlay as? Overlay.AppMenu)?.inFolder
         val backdropBlur by animateDpAsState(
-            if (overlay is Overlay.ControlCenter || overlay is Overlay.HiddenApps || openFolder != null) 30.dp else 0.dp,
+            if (overlay is Overlay.ControlCenter || overlay is Overlay.HiddenApps) 30.dp else 0.dp,
             tween(320, easing = Motion.EaseOut), label = "backdrop-blur",
         )
 
@@ -310,30 +292,37 @@ fun HomeScreen(
                     renderEffect = if (r > 0.5f && Build.VERSION.SDK_INT >= 31) BlurEffect(r, r, TileMode.Clamp) else null
                 },
         ) {
-            // The glass plate under the top row, as wide as the apps in it (tvOS 26).
-            val topCount = apps.size.coerceAtMost(COLUMNS)
-            val plate = if (topCount == 0 || !AerialSettings.homePlate) null else with(density) {
-                Rect(
-                    (metrics.margin - PlatePadH).toPx(),
-                    (metrics.topRowY - PlatePadV).toPx(),
-                    (metrics.margin + metrics.pitchX * (topCount - 1) + metrics.tileW + PlatePadH).toPx(),
-                    (metrics.topRowY + metrics.tileH + PlatePadV + metrics.nameRoom).toPx(),
+            // The Liquid Glass the tiles sit on: one plate around the whole grid. A plate per row
+            // left a gap between them, which read as several cards rather than one surface.
+            // Turning it off leaves none anywhere.
+            val plates = if (!AerialSettings.tileGlass || apps.isEmpty()) emptyList() else with(density) {
+                // As wide as the widest row, so the plate hugs the grid instead of running past a
+                // short last row.
+                val widest = minOf(COLUMNS, apps.size)
+                val bottom = metrics.topRowY + metrics.pitchY * (rows - 1) + metrics.tileH
+                listOf(
+                    Rect(
+                        (metrics.margin - PlatePadH).toPx(),
+                        (metrics.topRowY - PlatePadV).toPx(),
+                        (metrics.margin + metrics.pitchX * (widest - 1) + metrics.tileW + PlatePadH).toPx(),
+                        (bottom + PlatePadV).toPx(),
+                    ),
                 )
             }
             HomeBackground(
                 // The chosen wallpaper; in "Follow App" mode, light from the focused app.
                 backdrop = Wallpapers.backdrop ?: ambientApp?.art?.backdrop,
                 frosted = Wallpapers.frosted.takeIf { Wallpapers.backdrop != null },
-                plate = plate,
+                plates = plates,
                 scroll = { scroll.value },
                 collapse = collapsePx,
             )
 
             Box(Modifier.fillMaxSize().offset { IntOffset(0, -scroll.value.roundToInt()) }) {
                 val clockRight = AerialSettings.clockRight
-                // The large clock stands over the top row; the small one is the time and weather in
-                // one line, top left or beside the pill, so the wallpaper keeps the screen.
-                if (AerialSettings.largeClock) {
+                // With one row the wallpaper keeps the screen, as under tvOS's full-screen shelf: no
+                // big clock, only the time and weather in one line, top left or beside the pill.
+                if (!AerialSettings.oneRowHome) {
                     ShelfClock(
                         now = now,
                         alignEnd = clockRight,
@@ -380,16 +369,7 @@ fun HomeScreen(
                             },
                             onClick = { bounds ->
                                 val mover = moving
-                                if (mover == null) {
-                                    val folder = app.folder
-                                    if (folder == null) onLaunch(app, bounds)
-                                    else {
-                                        // Closing the folder comes back to its tile.
-                                        focusAfterOverlay = app.key
-                                        indexAfterOverlay = index
-                                        vm.overlay = Overlay.Folder(folder.id)
-                                    }
-                                }
+                                if (mover == null) onLaunch(app, bounds)
                                 // While moving, tapping a tile puts the app there; tapping the app
                                 // itself is done.
                                 else if (mover == app.key) vm.endMove()
@@ -399,11 +379,7 @@ fun HomeScreen(
                                 }
                             },
                             onLongPress = { bounds ->
-                                if (moving == null) {
-                                    focusAfterOverlay = app.key
-                                    indexAfterOverlay = index
-                                    vm.overlay = Overlay.AppMenu(app.key, bounds ?: Rect.Zero)
-                                }
+                                if (moving == null) vm.overlay = Overlay.AppMenu(app.key, bounds ?: Rect.Zero)
                             },
                             modifier = Modifier.offset { slot.value },
                         )
@@ -423,8 +399,8 @@ fun HomeScreen(
         }
 
         // The pill holds only the network and Control Center. The time joins it once the clock
-        // above the top row has scrolled away, so the screen never shows the time twice. The small
-        // clock on the right puts the time and weather just left of the pill.
+        // above the top row has scrolled away, so the screen never shows the time twice. One-row
+        // Home with the clock on the right puts the time and weather just left of the pill.
         Row(
             Modifier
                 .align(Alignment.TopEnd)
@@ -432,7 +408,7 @@ fun HomeScreen(
                 .graphicsLayer { alpha = if (overlay is Overlay.ControlCenter) 0f else 1f },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!AerialSettings.largeClock && AerialSettings.clockRight) {
+            if (AerialSettings.oneRowHome && AerialSettings.clockRight) {
                 CornerClock(
                     now = now,
                     modifier = Modifier
@@ -492,61 +468,26 @@ fun HomeScreen(
             onClose = { vm.overlay = Overlay.None },
         )
 
-        FolderView(
-            name = openFolder?.let { id -> apps.firstOrNull { it.folder?.id == id }?.label },
-            apps = openFolder?.let { vm.folderApps[it] }.orEmpty(),
-            visible = openFolder != null,
-            enabled = overlay is Overlay.Folder,
-            tileW = metrics.tileW,
-            tileH = metrics.tileH,
-            columns = COLUMNS,
-            onLaunch = onLaunch,
-            onLongPress = { app, bounds -> vm.overlay = Overlay.AppMenu(app.key, bounds ?: Rect.Zero, inFolder = openFolder) },
-            onDismiss = { vm.overlay = Overlay.None },
-        )
-
         val menu = overlay as? Overlay.AppMenu
-        // A menu opened in a folder closes back to the folder.
-        fun closeMenu() { vm.overlay = menu?.inFolder?.let { Overlay.Folder(it) } ?: Overlay.None }
         AppMenu(
-            app = menu?.let { vm.entry(it.key) },
+            app = menu?.let { m -> apps.firstOrNull { it.key == m.key } },
             anchor = menu?.anchor,
-            inFolder = menu?.inFolder != null,
-            folders = vm.folders(),
             onMove = { vm.startMove(it) },
             onHide = { key ->
-                closeMenu()
+                vm.overlay = Overlay.None
                 vm.hide(key)
             },
-            onInfo = { closeMenu(); onAppInfo(it) },
-            onUninstall = { closeMenu(); onUninstall(it) },
+            onInfo = { vm.overlay = Overlay.None; onAppInfo(it) },
+            onUninstall = { vm.overlay = Overlay.None; onUninstall(it) },
             onUnpin = { key ->
-                closeMenu()
-                vm.entry(key)?.source?.let { vm.setSourcePinned(it, false) }
+                vm.overlay = Overlay.None
+                apps.firstOrNull { it.key == key }?.source?.let { vm.setSourcePinned(it, false) }
             },
             onResetIcon = { key ->
-                closeMenu()
+                vm.overlay = Overlay.None
                 vm.resetIcon(key)
             },
-            onToFolder = { key, id ->
-                val folderKey = vm.putInFolder(key, id)
-                // From Home, focus goes to the folder the app went into.
-                if (menu?.inFolder == null) focusAfterOverlay = folderKey
-                closeMenu()
-            },
-            onOutOfFolder = { key ->
-                vm.takeOutOfFolder(key)
-                closeMenu()
-            },
-            onRenameFolder = { id, name ->
-                vm.renameFolder(id, name)
-                closeMenu()
-            },
-            onUngroup = { id ->
-                vm.ungroup(id)
-                closeMenu()
-            },
-            onDismiss = { closeMenu() },
+            onDismiss = { vm.overlay = Overlay.None },
         )
 
         HiddenAppsSheet(
@@ -582,6 +523,21 @@ fun HomeScreen(
             onDone = { pin?.onDone?.invoke() },
             onCancel = { vm.overlay = Overlay.None },
         )
+
+        // The flowing rainbow frame around Home. Under the screensaver, which is a full-screen film.
+        MarqueeBorder(Modifier.fillMaxSize())
+
+        // Night pulls the whole Home down a stop. The projector's own light is the firmware's to set.
+        if (AerialSettings.nightMode) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f)))
+
+        // Control Center > Tools paints over everything: test pictures, a blackout, ambient scenes.
+        when (vm.tool) {
+            Tool.TestPattern -> TestPattern(vm.testPattern, Modifier.fillMaxSize())
+            Tool.Blackout -> Box(Modifier.fillMaxSize().background(Color.Black))
+            Tool.Ambient -> Ambient(vm.ambientScene, now, Modifier.fillMaxSize())
+            Tool.Remote -> RemotePad(Modifier.fillMaxSize())
+            Tool.None -> Unit
+        }
 
         Screensaver(visible = vm.screensaverVisible, apps = apps, now = now, skips = vm.screensaverSkips)
     }

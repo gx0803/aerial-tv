@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Aerial 遥控</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --card: #161a23;
+    --card2: #1d222d;
+    --line: #2a303d;
+    --ink: #f2f4f8;
+    --dim: #98a1b3;
+    --accent: #5b9dff;
+    --ok: #37c07a;
+    --warn: #e8a13a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  body { padding: 16px 14px 34px; max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 14px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px;
+    background: var(--card2); color: var(--dim); border: 1px solid var(--line); }
+  .badge.on { color: var(--ok); border-color: #23543c; background: #10241a; }
+  .badge.off { color: var(--warn); border-color: #4a3a1d; background: #241d10; }
+
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0 10px; }
+  .pad .key { height: 84px; }
+  .pad .key.mid { height: 84px; }
+
+  .key { display: flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    color: var(--ink); font-size: 15px; font-weight: 500; user-select: none;
+    transition: transform .06s, background .12s; cursor: pointer; }
+  .key:active, .key.hit { background: var(--accent); border-color: var(--accent); color: #06101f; transform: scale(.96); }
+  .key.ghost { background: transparent; border-color: transparent; }
+  .key.round { border-radius: 50%; }
+  .key small { font-size: 11px; color: var(--dim); display: block; font-weight: 400; }
+  .key:active small, .key.hit small { color: #06101f; }
+
+  .row { display: grid; gap: 10px; margin-bottom: 10px; }
+  .row.c2 { grid-template-columns: 1fr 1fr; }
+  .row.c3 { grid-template-columns: repeat(3, 1fr); }
+  .row .key { height: 56px; }
+
+  h2 { font-size: 13px; color: var(--dim); font-weight: 500; margin: 22px 0 8px; letter-spacing: .04em; }
+
+  .field { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; min-width: 0; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; font-size: 16px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  button { background: var(--accent); color: #06101f; border: 0; border-radius: 12px;
+    padding: 0 18px; height: 48px; font-size: 15px; font-weight: 600; }
+  button.plain { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  button:active { opacity: .75; }
+  .edits { margin-top: 8px; }
+  .edits button { height: 44px; padding: 0; font-size: 14px; font-weight: 500; }
+
+  .histHead { display: flex; align-items: center; justify-content: space-between; }
+  .histHead h2 { margin: 22px 0 8px; }
+  .histHead button { height: 30px; padding: 0 12px; font-size: 12.5px; font-weight: 500;
+    border-radius: 9px; }
+  .hist { display: flex; flex-direction: column; gap: 8px; }
+  .hist .item { display: flex; align-items: center; gap: 10px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px; padding: 0 6px 0 13px; }
+  .hist .text { flex: 1; min-width: 0; padding: 12px 0; font-size: 14.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist .when { color: var(--dim); font-size: 11.5px; flex: none; }
+  .hist .del { flex: none; width: 32px; height: 32px; border-radius: 9px; background: transparent;
+    color: var(--dim); font-size: 18px; font-weight: 400; padding: 0; line-height: 1; }
+  .hist .del:active { background: var(--card2); color: var(--ink); }
+  .hist .empty { color: var(--dim); font-size: 12.5px; }
+
+  .note { color: var(--dim); font-size: 12.5px; margin-top: 8px; line-height: 1.6; }
+  .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: #eef2fb; color: #0b0d12; padding: 10px 18px; border-radius: 22px;
+    font-size: 14px; font-weight: 500; opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .toast.show { opacity: .96; }
+</style>
+</head>
+<body>
+
+<h1>遥控</h1>
+<div class="sub"><span id="device">电视</span> · <span id="mode" class="badge">连接中…</span></div>
+<div class="note">这个地址固定不变——把本页加进浏览器收藏夹，以后开机直接打开就是遥控器，不用再扫码。</div>
+
+<div class="pad">
+  <div class="key ghost"></div>
+  <div class="key" data-key="Up">▲</div>
+  <div class="key ghost"></div>
+  <div class="key" data-key="Left">◀</div>
+  <div class="key round" data-key="Ok">OK</div>
+  <div class="key" data-key="Right">▶</div>
+  <div class="key ghost"></div>
+  <div class="key" data-key="Down">▼</div>
+  <div class="key ghost"></div>
+</div>
+
+<div class="row c3">
+  <div class="key" data-key="Back">返回</div>
+  <div class="key" data-key="Home">主页</div>
+  <div class="key" data-key="Menu">菜单</div>
+</div>
+
+<div class="row c2">
+  <div class="key" data-key="VolumeDown">音量 −</div>
+  <div class="key" data-key="VolumeUp">音量 ＋</div>
+</div>
+
+<h2>打字</h2>
+<div class="field">
+  <input id="text" type="text" placeholder="输入后点发送" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button id="send">发送</button>
+</div>
+<div class="row c2 edits">
+  <button class="plain" id="backspace">退格</button>
+  <button class="plain" id="clear">清空</button>
+</div>
+<div class="note" id="typeNote"></div>
+
+<div class="histHead">
+  <h2>输入历史</h2>
+  <button class="plain" id="histClear" hidden>清空</button>
+</div>
+<div class="hist" id="history"></div>
+<div class="note">点一条就填回上面的输入框，再点发送。历史存在电视上，换手机打开也还在。</div>
+
+<h2>配置</h2>
+<div class="row c2">
+  <button class="plain" id="export">导出配置</button>
+  <button class="plain" id="import">导入配置</button>
+</div>
+<input id="file" type="file" accept=".json,application/json" hidden>
+<div class="note" id="cfgNote">导出后得到一个 JSON 文件：边框主题、夜间模式、焦点样式、城市、屏保、隐藏应用、家长 PIN 都在里面。壁纸和自定义图标是图片文件，不随配置走。</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var base = location.pathname.replace(/\/remote$/, '/');
+  var mode = document.getElementById('mode');
+  var device = document.getElementById('device');
+  var toastEl = document.getElementById('toast');
+  var typeNote = document.getElementById('typeNote');
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toast.t);
+    toast.t = setTimeout(function () { toastEl.classList.remove('show'); }, 1600);
+  }
+
+  function apply(s) {
+    if (s.device) device.textContent = s.device;
+    if (s.inFront) {
+      mode.textContent = '全部按键可用';
+      mode.className = 'badge on';
+    } else if (s.shell) {
+      mode.textContent = '全部按键可用 · 跨应用';
+      mode.className = 'badge on';
+    } else {
+      mode.textContent = '仅返回 / 主页可用';
+      mode.className = 'badge off';
+    }
+    typeNote.textContent = s.keyboard
+      ? '文字会写进当前获得焦点的输入框（电视上先点开搜索框或输入框）。'
+      : '文字功能需要「Aerial 手机遥控」无障碍服务，现在没在运行。';
+  }
+
+  function state() {
+    return fetch(base + 'api/remote/state').then(function (r) { return r.json(); }).then(apply).catch(function () {
+      mode.textContent = '连接断开';
+      mode.className = 'badge off';
+    });
+  }
+
+  function form(url, data) {
+    var body = new URLSearchParams();
+    Object.keys(data).forEach(function (k) { body.append(k, data[k]); });
+    return fetch(base + url, { method: 'POST', body: body }).then(function (r) { return r.json(); });
+  }
+
+  function press(key) {
+    form('api/remote/key', { key: key }).then(apply).catch(function () { toast('没连上电视'); });
+  }
+
+  document.querySelectorAll('[data-key]').forEach(function (el) {
+    var key = el.dataset.key;
+    var hold, repeat;
+    function stop() {
+      clearTimeout(hold); clearInterval(repeat);
+      el.classList.remove('hit');
+    }
+    el.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      el.classList.add('hit');
+      press(key);
+      // Holding a direction walks a grid faster than tapping; the others fire once.
+      if (key === 'Up' || key === 'Down' || key === 'Left' || key === 'Right') {
+        hold = setTimeout(function () {
+          repeat = setInterval(function () { press(key); }, 130);
+        }, 420);
+      }
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { el.addEventListener(ev, stop); });
+  });
+
+  document.getElementById('send').addEventListener('click', function () {
+    var input = document.getElementById('text');
+    var text = input.value;
+    if (!text) return;
+    form('api/remote/text', { text: text }).then(function (s) {
+      apply(s);
+      if (s.written) { toast('已输入'); input.value = ''; loadHistory(); }
+      else toast('电视上没有可写的输入框');
+    }).catch(function () { toast('没连上电视'); });
+  });
+
+  // Editing what is already in the TV's field. Sending replaces the whole text, so one wrong
+  // character could only be fixed by retyping everything before these two buttons existed.
+  var textEl = document.getElementById('text');
+
+  function edit(url) {
+    return form(url, { t: '1' }).then(function (s) {
+      if (!s.written) toast('电视上没有可写的输入框');
+      return !!s.written;
+    }).catch(function () { toast('没连上电视'); return false; });
+  }
+
+  var back = document.getElementById('backspace');
+  var backHold, backRepeat;
+  function backOnce() {
+    edit('api/remote/backspace').then(function (ok) {
+      // Keep the box in step with the TV so the next send does not put the text back.
+      if (ok && textEl.value) textEl.value = textEl.value.slice(0, -1);
+    });
+  }
+  back.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    backOnce();
+    // Holding it takes a long word apart faster than tapping; the field itself is the source of
+    // truth, so nothing is lost if a repeat lands on an empty field.
+    backHold = setTimeout(function () { backRepeat = setInterval(backOnce, 180); }, 500);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+    back.addEventListener(ev, function () { clearTimeout(backHold); clearInterval(backRepeat); });
+  });
+
+  document.getElementById('clear').addEventListener('click', function () {
+    edit('api/remote/clear').then(function (ok) { if (ok) textEl.value = ''; });
+  });
+
+  // What was sent before, newest first, so a word typed once does not have to be spelled out
+  // again with a remote. The list lives on the TV, so it follows the viewer between phones.
+  var histEl = document.getElementById('history');
+  var histClear = document.getElementById('histClear');
+
+  function stamp(ms) {
+    var d = new Date(ms || Date.now());
+    var now = new Date();
+    var hm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    if (d.toDateString() === now.toDateString()) return hm;
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm;
+  }
+
+  function drawHistory(items) {
+    histEl.textContent = '';
+    histClear.hidden = !items.length;
+    if (!items.length) {
+      var empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = '还没有发送过的内容。';
+      histEl.appendChild(empty);
+      return;
+    }
+    items.forEach(function (it) {
+      var row = document.createElement('div');
+      row.className = 'item';
+
+      var text = document.createElement('div');
+      text.className = 'text';
+      // textContent, never innerHTML: this is whatever was typed, brackets and all.
+      text.textContent = it.text;
+      text.addEventListener('click', function () {
+        textEl.value = it.text;
+        textEl.focus();
+        toast('已填入，点发送');
+      });
+
+      var when = document.createElement('div');
+      when.className = 'when';
+      when.textContent = stamp(it.at);
+
+      var del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = '×';
+      del.setAttribute('aria-label', '删除这条');
+      del.addEventListener('click', function (e) {
+        e.stopPropagation();
+        form('api/remote/history/delete', { text: it.text })
+          .then(function (s) { drawHistory(s.items || []); })
+          .catch(function () { toast('没连上电视'); });
+      });
+
+      row.appendChild(text);
+      row.appendChild(when);
+      row.appendChild(del);
+      histEl.appendChild(row);
+    });
+  }
+
+  function loadHistory() {
+    fetch(base + 'api/remote/history').then(function (r) { return r.json(); })
+      .then(function (s) { drawHistory(s.items || []); })
+      .catch(function () { /* the poll above already says whether the TV is reachable */ });
+  }
+
+  histClear.addEventListener('click', function () {
+    form('api/remote/history/clear', { t: '1' })
+      .then(function (s) { drawHistory(s.items || []); toast('历史已清空'); })
+      .catch(function () { toast('没连上电视'); });
+  });
+
+  document.getElementById('export').addEventListener('click', function () {
+    location.href = base + 'api/config/export';
+    toast('开始下载');
+  });
+
+  var file = document.getElementById('file');
+  document.getElementById('import').addEventListener('click', function () { file.click(); });
+  file.addEventListener('change', function () {
+    var f = file.files && file.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      form('api/config/import', { json: reader.result }).then(function (s) {
+        if (s.applied > 0) toast('已导入 ' + s.applied + ' 项');
+        else toast('文件读不懂');
+        state();
+      }).catch(function () { toast('导入失败'); });
+    };
+    reader.readAsText(f);
+    file.value = '';
+  });
+
+  state();
+  setInterval(state, 5000);
+  loadHistory();
+})();
+</script>
+</body>
+</html>

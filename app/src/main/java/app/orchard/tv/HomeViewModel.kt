@@ -12,11 +12,7 @@ import androidx.lifecycle.viewModelScope
 import app.orchard.tv.apps.AppCatalog
 import app.orchard.tv.apps.AppEntry
 import app.orchard.tv.apps.CustomIcons
-import app.orchard.tv.apps.FOLDER_KEY_PREFIX
 import app.orchard.tv.apps.LayoutStore
-import app.orchard.tv.apps.TileArt
-import app.orchard.tv.apps.TileArtFactory
-import app.orchard.tv.apps.folderEntry
 import app.orchard.tv.apps.sourceEntry
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.system.Brightness
@@ -36,15 +32,19 @@ import kotlinx.coroutines.withContext
 sealed interface Overlay {
     data object None : Overlay
     data class ControlCenter(val page: CcPage = CcPage.Main) : Overlay
-    /** [inFolder]: the menu was opened inside that folder, and closes back to it. */
-    data class AppMenu(val key: String, val anchor: Rect, val inFolder: String? = null) : Overlay
-    data class Folder(val id: String) : Overlay
+    data class AppMenu(val key: String, val anchor: Rect) : Overlay
     data object HiddenApps : Overlay
     data object Wallpaper : Overlay
     data class Pin(val mode: PinMode, val onDone: () -> Unit) : Overlay
 }
 
-enum class CcPage { Main, Inputs, InputSettings, Update }
+enum class CcPage { Main, Inputs, InputSettings, Update, Tools }
+
+/**
+ * A full-screen page that is not a sheet: it covers Home and answers the remote itself. Control
+ * Center sets it; MainActivity reads the keys; HomeScreen draws it.
+ */
+enum class Tool { None, TestPattern, Blackout, Ambient, Remote }
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val context get() = getApplication<Application>()
@@ -53,16 +53,19 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     var apps by mutableStateOf<List<AppEntry>>(emptyList()); private set
     var hiddenApps by mutableStateOf<List<AppEntry>>(emptyList()); private set
-
-    /** Each folder's apps, by folder id, in the folder's order. */
-    var folderApps by mutableStateOf<Map<String, List<AppEntry>>>(emptyMap()); private set
-
-    /** A folder's tile picture with the apps it was made from, so it is redrawn only when they change. */
-    private val folderArt = HashMap<String, Pair<List<TileArt>, TileArt>>()
     var loaded by mutableStateOf(false); private set
 
     var overlay by mutableStateOf<Overlay>(Overlay.None)
     var movingKey by mutableStateOf<String?>(null); private set
+
+    /** The full-screen page over Home, if any (Control Center > Tools). */
+    var tool by mutableStateOf(Tool.None)
+
+    /** Which test picture the pattern page shows; Left/Right step through them. */
+    var testPattern by mutableStateOf(0)
+
+    /** Which scene the ambient page shows. */
+    var ambientScene by mutableStateOf(0)
 
     var network by mutableStateOf(NetworkStatus()); private set
     var volume by mutableStateOf(VolumeStatus()); private set
@@ -121,53 +124,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private fun arrange() {
         // Pinned TV inputs share the grid, order and hiding with the apps.
         val pinned = sources.filter { it.id in AerialSettings.pinnedSources }.map(::sourceEntry)
-        val arrangement = store.arrange(all + pinned) { folder, inside ->
-            val shown = inside.take(9).map { it.art }
-            val art = folderArt[folder.id]?.takeIf { (made, _) -> made.size == shown.size && made.indices.all { made[it] === shown[it] } }?.second
-                ?: TileArtFactory.forFolder(shown).also { folderArt[folder.id] = shown to it }
-            folderEntry(folder, art)
-        }
-        apps = arrangement.home
-        folderApps = arrangement.folders
-        hiddenApps = arrangement.hidden
-    }
-
-    /** An app or folder on Home, or an app inside a folder. */
-    fun entry(key: String): AppEntry? = apps.firstOrNull { it.key == key } ?: folderApps.values.flatten().firstOrNull { it.key == key }
-
-    /** The folders on Home, in order, for "Move to Folder". */
-    fun folders() = store.folders()
-
-    /**
-     * Puts [key] into folder [id], or into a new folder named after what the app is, which takes
-     * its place on Home. Returns the folder's key.
-     */
-    fun putInFolder(key: String, id: String?): String {
-        val names = context.resources.getStringArray(R.array.folder_names)
-        val app = entry(key)
-        // Firmware apps are what most folders on a TV are for.
-        val base = if (app != null && !app.removable && app.source == null) names[0] else context.getString(R.string.folder_default)
-        val taken = store.folders().map { it.name }.toSet()
-        val name = generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base $it" }.first { it !in taken }
-        val folder = store.putInFolder(key, id, name)
-        arrange()
-        return FOLDER_KEY_PREFIX + folder
-    }
-
-    fun takeOutOfFolder(key: String) {
-        store.takeOutOfFolder(key)
-        arrange()
-    }
-
-    fun renameFolder(id: String, name: String) {
-        store.renameFolder(id, name)
-        arrange()
-    }
-
-    fun ungroup(id: String) {
-        store.ungroup(id)
-        folderArt.remove(id)
-        arrange()
+        val (visible, hidden) = store.arrange(all + pinned)
+        apps = visible
+        hiddenApps = hidden
     }
 
     /** Drops the picture chosen on the phone page; the tile goes back to the app's own artwork. */

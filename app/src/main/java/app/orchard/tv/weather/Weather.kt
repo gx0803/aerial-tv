@@ -42,6 +42,15 @@ object Weather {
     /** A reading older than this is not shown at all. */
     private const val STALE_MS = 3 * 60 * 60 * 1000L
 
+    /**
+     * The city this build shows until the owner names another one on the phone page. Guessing it
+     * from the public address is often wrong behind a carrier NAT or a proxy (a whole home, or a
+     * whole province, shows as one city), which for this TV meant Shanghai; 长沙 is where it is.
+     */
+    private const val DEFAULT_PLACE = "长沙"
+    private const val DEFAULT_LAT = 28.2282f
+    private const val DEFAULT_LON = 112.9388f
+
     var now by mutableStateOf<WeatherNow?>(null); private set
 
     /** Where the weather is for, as a name to show; null until known. */
@@ -60,6 +69,23 @@ object Weather {
         if (started) return
         started = true
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // One-time: the place this build starts on is 长沙, not the network's guess. Only when the
+        // owner has not named a place, so a city picked on the phone page is never overwritten;
+        // "use network location" still brings the guess back afterwards.
+        if (prefs.getInt("defaults_version", 0) < 1) {
+            if (!prefs.getBoolean("chosen", false)) {
+                prefs.edit {
+                    putFloat("lat", DEFAULT_LAT)
+                    putFloat("lon", DEFAULT_LON)
+                    putString("place", DEFAULT_PLACE)
+                    putBoolean("chosen", true)
+                    putLong("located_at", System.currentTimeMillis())
+                    // Drop the cached reading so the clock shows the new city at once.
+                    remove("fetched_at")
+                }
+            }
+            prefs.edit { putInt("defaults_version", 1) }
+        }
         place = prefs.getString("place", null)
         chosen = prefs.getBoolean("chosen", false)
         if (System.currentTimeMillis() - prefs.getLong("fetched_at", 0) < STALE_MS) {

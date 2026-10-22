@@ -2,7 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <activity android:name="app.orchard.tv.MainActivity">
-            <intent-filter>
+            <!--
+              Priority above the firmware's own launcher, so Home resolves to Aerial by itself.
+              With equal priorities the choice stays open, and XGIMI's firmware then opens a
+              chooser whose "just once" and "always" buttons are both greyed out (seen on this TV):
+              Home did nothing, and Back out of an app landed on the stock launcher instead.
+            -->
+            <intent-filter android:priority="1">
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -1,15 +1,5 @@
 package app.orchard.tv.ui.home
 
-import android.graphics.BitmapShader
-import android.graphics.BlurMaskFilter
-import android.graphics.ComposeShader
-import android.graphics.LinearGradient
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.RadialGradient
-import android.graphics.Shader
 import android.view.KeyEvent as NativeKeyEvent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -23,14 +13,13 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,26 +31,20 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
@@ -76,35 +59,26 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.createBitmap
 import app.orchard.tv.apps.AppEntry
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.settings.FocusStyle
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.ui.components.isSelect
-import app.orchard.tv.ui.components.baked
-import app.orchard.tv.ui.components.frozen
-import app.orchard.tv.ui.components.smoothMask
-import app.orchard.tv.ui.components.smoothRectPath
 import app.orchard.tv.ui.theme.LocalReducedMotion
 import app.orchard.tv.ui.theme.Motion
 import app.orchard.tv.ui.theme.Type
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 // D-pad remotes give no tilt to follow, so the lift itself has to read from across the room.
 private const val FOCUSED_SCALE = 1.15f
 private const val PRESSED_SCALE = 1.05f
 private val Corner = 12.dp
-private const val RIM_AT_REST = 0.07f
 
 // High-contrast focus frame: a white ring this far outside the tile, as tvOS draws it.
 private val RingGap = 5.dp
-private val ShadowBlur = 14.dp
-private val ShadowDrop = 12.dp
 private val RingWidth = 3.dp
 
 /**
@@ -129,8 +103,6 @@ fun AppTile(
     modifier: Modifier = Modifier,
 ) {
     val reduced = LocalReducedMotion.current
-    // The tile's face at its drawn size, made on first draw and kept while the artwork lasts.
-    val faceFor = remember(app.art) { arrayOfNulls<Pair<IntSize, ImageBitmap>>(1) }
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -221,30 +193,6 @@ fun AppTile(
                 translationY = (1f - appear.value) * 18.dp.toPx()
             },
     ) {
-        if (lift > 0.01f) {
-            // A lifted tile casts a soft shadow below it, as cards do on tvOS. The system's
-            // elevation shadow is too faint to read on a TV; this one is baked, so it costs one
-            // image draw while a tile is lifted.
-            Canvas(
-                Modifier
-                    .size(width, height)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        rotationY = leanY.value
-                        rotationX = leanX.value
-                        rotationZ = wobble?.value ?: 0f
-                        translationX = push.value.x
-                        translationY = push.value.y + ShadowDrop.toPx() * lift
-                        cameraDistance = 14f * density
-                        alpha = lift
-                        compositingStrategy = CompositingStrategy.ModulateAlpha
-                    },
-            ) {
-                val shadow = tileShadow(size.width.roundToInt(), size.height.roundToInt(), Corner.toPx(), ShadowBlur.toPx())
-                translate(-shadow.ext, -shadow.ext) { drawImage(shadow.image) }
-            }
-        }
         Box(
             Modifier
                 .size(width, height)
@@ -258,8 +206,7 @@ fun AppTile(
                     translationX = push.value.x
                     translationY = push.value.y
                     cameraDistance = 14f * density
-                    // The plain rounded rect holds the continuous outline the tile draws itself,
-                    // and the hardware clips to it for free.
+                    shadowElevation = 32.dp.toPx() * lift
                     shape = RoundedCornerShape(Corner)
                     clip = true
                 }
@@ -366,46 +313,45 @@ fun AppTile(
                 }
                 .focusable(enabled),
         ) {
-            Spacer(Modifier.fillMaxSize().drawWithCache {
+            Canvas(Modifier.fillMaxSize()) {
                 val art = app.art
-                val w = size.width.roundToInt()
-                val h = size.height.roundToInt()
-                val full = IntSize(w, h)
-                // The plate is a picture made once: the artwork cut to the continuous outline with
-                // its rim, so a tile is one image draw, as before. Cut on the GPU (a path, or masks
-                // sampled with the artwork) it took the Xiaomi MFTR0 from 11ms to 15-72ms a frame.
-                val face = faceFor[0]?.takeIf { it.first == full }?.second
-                    ?: tileFace(art.back, w, h, Corner.toPx(), 0.5.dp.toPx()).also { faceFor[0] = full to it }
-                val shape = BitmapShader(smoothMask(w, h, Corner.toPx()), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-                    .apply { setLocalMatrix(Matrix().apply { setScale(size.width / w, size.height / h) }) }
-                val rim = tileRim(w, h, Corner.toPx(), 0.5.dp.toPx())
-                onDrawBehind {
-                    drawImage(face, dstSize = full)
-                    art.fore?.let { fore ->
-                        val at = art.foreAt
-                        // Parallax: the logo travels further than the plate when the tile leans.
-                        val px = leanY.value / 7f * size.width * 0.035f
-                        val py = -leanX.value / 7f * size.height * 0.035f
-                        drawImage(
-                            fore,
-                            dstOffset = IntOffset((at.left * size.width + px).roundToInt(), (at.top * size.height + py).roundToInt()),
-                            dstSize = IntSize((at.width * size.width).roundToInt(), (at.height * size.height).roundToInt()),
-                            filterQuality = FilterQuality.Medium,
-                        )
-                    }
-                    if (lift > 0.01f) {
-                        // Light from above: a soft sheen across the top, brighter where the tile leans toward it.
-                        val glintX = size.width * (0.3f + leanY.value / 7f * 0.25f)
-                        val glint = RadialGradient(
-                            glintX, -size.height * 0.25f, size.width * 0.75f,
-                            Color.White.copy(alpha = 0.28f * lift).toArgb(), Color.Transparent.toArgb(), Shader.TileMode.CLAMP,
-                        )
-                        drawRect(ShaderBrush(ComposeShader(glint, shape, PorterDuff.Mode.DST_IN)), blendMode = BlendMode.Screen)
-                    }
-                    // A focused tile's rim catches a little more light.
-                    if (lift > 0.01f) drawImage(rim, dstSize = full, alpha = 0.08f * lift)
+                drawImage(
+                    art.back,
+                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    filterQuality = FilterQuality.Medium,
+                )
+                art.fore?.let { fore ->
+                    val at = art.foreAt
+                    // Parallax: the logo travels further than the plate when the tile leans.
+                    val px = leanY.value / 7f * size.width * 0.035f
+                    val py = -leanX.value / 7f * size.height * 0.035f
+                    drawImage(
+                        fore,
+                        dstOffset = IntOffset((at.left * size.width + px).roundToInt(), (at.top * size.height + py).roundToInt()),
+                        dstSize = IntSize((at.width * size.width).roundToInt(), (at.height * size.height).roundToInt()),
+                        filterQuality = FilterQuality.Medium,
+                    )
                 }
-            })
+                if (lift > 0.01f) {
+                    // Light from above: a soft sheen across the top, brighter where the tile leans toward it.
+                    val glintX = size.width * (0.3f + leanY.value / 7f * 0.25f)
+                    drawRect(
+                        Brush.radialGradient(
+                            0f to Color.White.copy(alpha = 0.28f * lift),
+                            1f to Color.Transparent,
+                            center = Offset(glintX, -size.height * 0.25f),
+                            radius = size.width * 0.75f,
+                        ),
+                        blendMode = BlendMode.Screen,
+                    )
+                }
+                // A hairline on the rim, as on tvOS icons, so dark artwork still reads against black.
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.07f + 0.08f * lift),
+                    cornerRadius = CornerRadius(Corner.toPx()),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
         }
 
         if (ring > 0.01f && ringIn > 0.01f) {
@@ -424,20 +370,43 @@ fun AppTile(
                         translationY = push.value.y
                         cameraDistance = 14f * density
                         alpha = ring * ringIn
-                        // No offscreen buffer while fading: it would be only tile-sized and clip the
-                        // frame down to the four corner arcs that reach inside the tile's bounds.
-                        compositingStrategy = CompositingStrategy.ModulateAlpha
                     },
             ) {
-                // The frame grows out from the tile to its place: drawn at its full gap, pulled in
-                // by what the gap still lacks.
-                val frame = ringFrame(size.width.roundToInt(), size.height.roundToInt(), Corner.toPx(), RingGap.toPx(), RingWidth.toPx(), 1.dp.toPx())
-                val e = frame.ext - RingGap.toPx() * 0.6f * (1f - ringIn)
-                translate(-e, -e) {
-                    scale((size.width + 2 * e) / frame.image.width, (size.height + 2 * e) / frame.image.height, pivot = Offset.Zero) {
-                        drawImage(frame.image)
-                    }
-                }
+                val gap = RingGap.toPx() * (0.4f + 0.6f * ringIn)
+                val w = RingWidth.toPx()
+                val out = gap + w / 2
+                // A faint dark edge outside the white one keeps the frame visible over bright sky or snow.
+                val halo = gap + w + 1.dp.toPx()
+                drawRoundRect(
+                    Color.Black.copy(alpha = 0.3f),
+                    topLeft = Offset(-halo, -halo),
+                    size = Size(size.width + halo * 2, size.height + halo * 2),
+                    cornerRadius = CornerRadius(Corner.toPx() + halo),
+                    style = Stroke(width = 2.dp.toPx()),
+                )
+                // Lit like the glass it sits on: brightest where light falls from the top left and
+                // at the far corner, still near white everywhere so it reads from across the room.
+                drawRoundRect(
+                    Brush.linearGradient(
+                        0f to Color.White,
+                        0.45f to Color.White.copy(alpha = 0.78f),
+                        1f to Color.White.copy(alpha = 0.94f),
+                        start = Offset(-out, -out),
+                        end = Offset(size.width + out, size.height + out),
+                    ),
+                    topLeft = Offset(-out, -out),
+                    size = Size(size.width + out * 2, size.height + out * 2),
+                    cornerRadius = CornerRadius(Corner.toPx() + out),
+                    style = Stroke(width = w),
+                )
+                // A thin inner line of light, the glass's thickness.
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.35f),
+                    topLeft = Offset(-out + w / 2 + 0.75.dp.toPx(), -out + w / 2 + 0.75.dp.toPx()),
+                    size = Size(size.width + (out - w / 2 - 0.75.dp.toPx()) * 2, size.height + (out - w / 2 - 0.75.dp.toPx()) * 2),
+                    cornerRadius = CornerRadius(Corner.toPx() + out - w / 2 - 0.75.dp.toPx()),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
             }
         }
 
@@ -455,98 +424,17 @@ fun AppTile(
                 .offset(y = height + 10.dp)
                 .requiredSize(width + 36.dp, 24.dp)
                 .graphicsLayer {
-                    // As on tvOS 26: no names on the glass of the top row; in the grid only the
-                    // focused app shows its name. With every name shown, the others stay a little
-                    // dimmer than the focused one.
-                    alpha = if (AerialSettings.showAllNames) 0.7f + 0.3f * lift else lift * (1f - (onGlass?.invoke() ?: 0f))
-                    // Sits just under the lifted tile, and rises into place as it appears.
+                    val glass = onGlass?.invoke() ?: 0f
+                    // As on tvOS 26: no names on the glass of the top row, and in the grid only
+                    // the focused app shows its name. The focused tile always shows it, though:
+                    // hiding it on the glass left the whole first row without a name.
+                    alpha = lift * if (focused) 1f else (1f - glass)
+                    // Sits just under the lifted tile, and rises into place as it appears. On the
+                    // glass it drops just clear of the plate's lower rim, no further: the row below
+                    // starts 30dp down, and a longer drop put the name under those tiles.
                     translationY = height.toPx() * (scale - 1f) / 2f - (1f - lift) * 6.dp.toPx() +
-                        ring * ringIn * (RingGap + RingWidth).toPx() * scale
+                        ring * ringIn * (RingGap + RingWidth).toPx() * scale + glass * 2.dp.toPx()
                 },
         )
     }
 }
-
-
-/**
- * The tile at rest: [back] cut to the continuous outline, with a hairline rim as on tvOS icons so
- * dark artwork still reads against black.
- */
-private fun tileFace(back: ImageBitmap, w: Int, h: Int, radius: Float, rimWidth: Float): ImageBitmap {
-    val src = back.asAndroidBitmap()
-    val bitmap = createBitmap(w, h)
-    android.graphics.Canvas(bitmap).apply {
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-            shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-                .apply { setLocalMatrix(Matrix().apply { setScale(w.toFloat() / src.width, h.toFloat() / src.height) }) }
-        }
-        drawPath(smoothRectPath(Rect(0f, 0f, w.toFloat(), h.toFloat()), radius).asAndroidPath(), fill)
-        drawBitmap(tileRim(w, h, radius, rimWidth, RIM_AT_REST).asAndroidBitmap(), 0f, 0f, null)
-    }
-    return bitmap.frozen().asImageBitmap()
-}
-
-/** The tile's rim: a hairline just inside its continuous outline, white at [alpha] on clear. */
-private fun tileRim(w: Int, h: Int, radius: Float, width: Float, alpha: Float = 1f): ImageBitmap = baked(listOf("tile-rim", w, h, radius, width, alpha)) {
-    val bitmap = createBitmap(w, h)
-    android.graphics.Canvas(bitmap).apply {
-        val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.White.copy(alpha = alpha).toArgb() }
-        drawPath(smoothRectPath(Rect(0f, 0f, w.toFloat(), h.toFloat()), radius).asAndroidPath(), white)
-        val inner = smoothRectPath(Rect(width, width, w - width, h - width), radius - width).asAndroidPath()
-        drawPath(inner, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) })
-    }
-    bitmap.frozen().asImageBitmap()
-}
-
-/** A tile's shadow, soft black under its continuous outline; [ext] px of it lie outside the tile on each side. */
-private class TileShadow(val image: ImageBitmap, val ext: Float)
-
-private fun tileShadow(w: Int, h: Int, corner: Float, blur: Float): TileShadow = baked(listOf("shadow", w, h, corner, blur)) {
-    val ext = ceil(blur * 1.5f)
-    val bitmap = createBitmap(w + 2 * ext.toInt(), h + 2 * ext.toInt())
-    android.graphics.Canvas(bitmap).apply {
-        translate(ext, ext)
-        drawPath(
-            smoothRectPath(Rect(0f, 0f, w.toFloat(), h.toFloat()), corner).asAndroidPath(),
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.Black.copy(alpha = 0.7f).toArgb()
-                maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)
-            },
-        )
-    }
-    TileShadow(bitmap.frozen().asImageBitmap(), ext)
-}
-
-/** The high-contrast frame at its full gap; [ext] px of the picture lie outside the tile on each side. */
-private class RingFrame(val image: ImageBitmap, val ext: Float)
-
-private fun ringFrame(w: Int, h: Int, corner: Float, gap: Float, width: Float, dp: Float): RingFrame =
-    baked(listOf("ring", w, h, corner, gap, width, dp)) {
-        val out = gap + width / 2
-        val halo = gap + width + dp
-        val ext = ceil(halo + dp + 1f)
-        val bitmap = createBitmap(w + 2 * ext.toInt(), h + 2 * ext.toInt())
-        val canvas = android.graphics.Canvas(bitmap).apply { translate(ext, ext) }
-        // Each line follows the tile's continuous corner, centred [d] outside its edge.
-        fun around(d: Float) = smoothRectPath(Rect(-d, -d, w + d, h + d), corner + d).asAndroidPath()
-        fun line(lineWidth: Float, color: Color) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = lineWidth
-            this.color = color.toArgb()
-        }
-        // A faint dark edge outside the white one keeps the frame visible over bright sky or snow.
-        canvas.drawPath(around(halo), line(2 * dp, Color.Black.copy(alpha = 0.3f)))
-        // Lit like the glass it sits on: brightest where light falls from the top left and at the
-        // far corner, still near white everywhere so it reads from across the room.
-        canvas.drawPath(around(out), line(width, Color.White).apply {
-            shader = LinearGradient(
-                -out, -out, w + out, h + out,
-                intArrayOf(Color.White.toArgb(), Color.White.copy(alpha = 0.78f).toArgb(), Color.White.copy(alpha = 0.94f).toArgb()),
-                floatArrayOf(0f, 0.45f, 1f),
-                Shader.TileMode.CLAMP,
-            )
-        })
-        // A thin inner line of light, the glass's thickness.
-        canvas.drawPath(around(out - width / 2 - 0.75f * dp), line(dp, Color.White.copy(alpha = 0.35f)))
-        RingFrame(bitmap.frozen().asImageBitmap(), ext)
-    }

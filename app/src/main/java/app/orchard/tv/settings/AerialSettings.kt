@@ -6,7 +6,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import android.os.SystemClock
-import android.provider.Settings
 import java.security.MessageDigest
 
 /**
@@ -21,18 +20,6 @@ enum class FocusStyle(val key: String) {
 
     companion object {
         fun of(key: String?) = entries.firstOrNull { it.key == key } ?: HighContrast
-    }
-}
-
-/**
- * Where interface sounds come from. The TV's own are silent wherever its key sound setting is off,
- * which many TVs ship with (Sony, issue #160; #169), so that is not the default there.
- */
-enum class UiSounds(val key: String) {
-    Tv("tv"), Aerial("aerial"), Off("off");
-
-    companion object {
-        fun of(key: String?) = entries.firstOrNull { it.key == key }
     }
 }
 
@@ -60,19 +47,26 @@ object AerialSettings {
     var oneRowHome by mutableStateOf(true); private set
 
     /** Interface sounds (system/Sounds), as tvOS plays them on every press. */
-    var uiSounds by mutableStateOf(UiSounds.Tv); private set
-
-    /** The Liquid Glass plate under the top row; some prefer the apps straight on the wallpaper (#151). */
-    var homePlate by mutableStateOf(true); private set
+    var uiSounds by mutableStateOf(true); private set
 
     /** The clock, with the date and weather, in the top right instead of the top left. */
     var clockRight by mutableStateOf(false); private set
 
-    /** The date and weather over a big clock above the top row, instead of one small line in the corner. */
-    var largeClock by mutableStateOf(false); private set
+    /** The flowing light around Home's four edges; Off for none. */
+    var marqueeTheme by mutableStateOf(MarqueeTheme.Rainbow); private set
 
-    /** Every app's name under its tile, not only the focused one's (issue #28). */
-    var showAllNames by mutableStateOf(false); private set
+    /**
+     * Night: the wallpaper, the tiles and the frame are all pulled down a stop, for a dark room and
+     * a projector throwing on a white wall. The panel's own light is the firmware's to change.
+     */
+    var nightMode by mutableStateOf(false); private set
+
+    /**
+     * The Liquid Glass plate under the tiles, on every row or on none of them. Plates on the top
+     * row only were tvOS's way of lifting the shelf off the picture, but once the rows below came
+     * in with none of it the difference read as a fault.
+     */
+    var tileGlass by mutableStateOf(true); private set
 
     /** Back on Home's top row starts the screensaver, as on tvOS; off for homes where it gets pressed by accident (issue #94). */
     var backStartsScreensaver by mutableStateOf(true); private set
@@ -107,15 +101,10 @@ object AerialSettings {
         pinSet = pinHash != null
         oneRowHome = prefs.getBoolean("one_row_home", true)
         clockRight = prefs.getBoolean("clock_right", false)
-        largeClock = prefs.getBoolean("large_clock", false)
-        homePlate = prefs.getBoolean("home_plate", true)
-        showAllNames = prefs.getBoolean("show_all_names", false)
-        // Before 1.28 this was on or off; on meant whichever sounds Aerial played.
-        uiSounds = UiSounds.of(prefs.getString("ui_sounds_kind", null)) ?: when {
-            !prefs.getBoolean("ui_sounds", true) -> UiSounds.Off
-            Settings.System.getInt(app.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1 -> UiSounds.Tv
-            else -> UiSounds.Aerial
-        }
+        marqueeTheme = MarqueeTheme.of(prefs.getString("marquee_theme", null))
+        nightMode = prefs.getBoolean("night_mode", false)
+        tileGlass = prefs.getBoolean("tile_glass", true)
+        uiSounds = prefs.getBoolean("ui_sounds", true)
         backStartsScreensaver = prefs.getBoolean("back_starts_screensaver", true)
         screensaverMinutes = prefs.getInt("screensaver_minutes", DEFAULT_SCREENSAVER_MINUTES)
     }
@@ -151,14 +140,9 @@ object AerialSettings {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("one_row_home", on) }
     }
 
-    fun chooseUiSounds(kind: UiSounds) {
-        uiSounds = kind
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("ui_sounds_kind", kind.key) }
-    }
-
-    fun chooseHomePlate(on: Boolean) {
-        homePlate = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("home_plate", on) }
+    fun chooseUiSounds(on: Boolean) {
+        uiSounds = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("ui_sounds", on) }
     }
 
     fun chooseClockRight(on: Boolean) {
@@ -166,14 +150,19 @@ object AerialSettings {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("clock_right", on) }
     }
 
-    fun chooseLargeClock(on: Boolean) {
-        largeClock = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("large_clock", on) }
+    fun chooseMarqueeTheme(theme: MarqueeTheme) {
+        marqueeTheme = theme
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("marquee_theme", theme.key) }
     }
 
-    fun chooseShowAllNames(on: Boolean) {
-        showAllNames = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("show_all_names", on) }
+    fun chooseNightMode(on: Boolean) {
+        nightMode = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("night_mode", on) }
+    }
+
+    fun chooseTileGlass(on: Boolean) {
+        tileGlass = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("tile_glass", on) }
     }
 
     fun chooseBackStartsScreensaver(on: Boolean) {

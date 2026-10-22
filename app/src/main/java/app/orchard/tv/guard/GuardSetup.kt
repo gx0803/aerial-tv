@@ -3,6 +3,7 @@ package app.orchard.tv.guard
 import android.Manifest
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -14,6 +15,8 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import android.util.Log
 import app.orchard.tv.dream.AerialDream
+import app.orchard.tv.remote.AdbBridge
+import app.orchard.tv.remote.RemoteService
 
 /**
  * Turns Home Guard back on after the firmware turned it off.
@@ -171,18 +174,93 @@ object GuardSetup {
         keepScreensaver(context)
         RevivalSync.ensure(context)
         val me = ComponentName(context, HomeGuardService::class.java).flattenToString()
+        // The phone remote's service rides along: it is only useful once enabled, and turning it on
+        // here costs nothing while that page is closed (it does nothing until bound).
+        val remote = ComponentName(context, RemoteService::class.java).flattenToString()
         val resolver = context.contentResolver
         val current = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         val entries = current.split(':').filter { it.isNotBlank() }
-        val alreadyOn = entries.any { ComponentName.unflattenFromString(it)?.flattenToString() == me }
+        val guardOn = entries.any { ComponentName.unflattenFromString(it)?.flattenToString() == me }
+        val remoteOn = entries.any { ComponentName.unflattenFromString(it)?.flattenToString() == remote }
+        val missing = listOfNotNull(me.takeUnless { guardOn }, remote.takeUnless { remoteOn })
         return runCatching {
-            if (!alreadyOn) {
-                lastRevivedAt = SystemClock.elapsedRealtime()
-                Settings.Secure.putString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, (entries + me).joinToString(":"))
-                Log.i(TAG, "Home Guard had been switched off; turned it back on")
+            if (missing.isNotEmpty()) {
+                if (!guardOn) lastRevivedAt = SystemClock.elapsedRealtime()
+                Settings.Secure.putString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, (entries + missing).joinToString(":"))
+                Log.i(TAG, "accessibility services had been switched off; turned them back on: $missing")
             }
             Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            !alreadyOn
+            !guardOn
         }.onFailure { Log.w(TAG, "could not re-enable Home Guard", it) }.getOrDefault(false)
+    }
+
+    private const val KEY_HOME_SET_AT = "home_set_at"
+
+    /** How often the Home choice is written again while it keeps getting lost. */
+    private const val HOME_RECHECK_MS = 60_000L
+
+    /**
+     * Makes Aerial the activity Home resolves to.
+     *
+     * With two launchers installed and neither chosen, Home opens the firmware's "open with"
+     * chooser and Back from an app lands on the stock launcher — which is what made it look like
+     * Aerial had quit and had to be started by hand. Only the shell can set this (there is no API
+     * an app may call for it), so it goes through Aerial's local adb.
+     *
+     * Written again on every start, because a force-stop takes the choice away with it: XGIMI's
+     * firmware force-stops Aerial whenever another app grows past what 1.8 GB of RAM allows, and
+     * the next Home press after that went to the chooser again.
+     */
+    fun claimHome(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val now = SystemClock.elapsedRealtime()
+        if (now - prefs.getLong(KEY_HOME_SET_AT, Long.MIN_VALUE / 2) < HOME_RECHECK_MS) return
+        val isHome = runCatching {
+            context.packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY,
+            )?.activityInfo?.packageName
+        }.getOrNull() == context.packageName
+        if (isHome) {
+            prefs.edit().putLong(KEY_HOME_SET_AT, now).apply()
+            return
+        }
+        val ran = runCatching {
+            AdbBridge.run("cmd package set-home-activity --user 0 ${context.packageName}/.MainActivity")
+        }.getOrDefault(false)
+        if (ran) {
+            prefs.edit().putLong(KEY_HOME_SET_AT, now).apply()
+            Log.i(TAG, "Home had no default; asked the shell to make Aerial it")
+        }
+    }
+
+    private const val KEY_HELD_AT = "held_at"
+
+    /** How often the background protections are written again. */
+    private const val HOLD_RECHECK_MS = 10 * 60 * 1000L
+
+    /**
+     * Asks the system to leave Aerial alone while it is in the background.
+     *
+     * XGIMI's firmware stops background apps itself, from inside system_server: dumpsys activity
+     * exit-info shows reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) "from pid 783", and it
+     * fires about once a minute, whether or not RAM is short — the last one took Aerial when it was
+     * down to 48 MB. Nothing an app can do makes it immune, but two things the shell can write make
+     * the system treat it as one it should not touch: the battery-optimisation whitelist and the
+     * background AppOp. Both are re-checked periodically rather than trusted once, since an update
+     * and some firmware resets drop them again.
+     */
+    fun holdBackground(context: Context) {
+        val me = context.packageName
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val now = SystemClock.elapsedRealtime()
+        if (now - prefs.getLong(KEY_HELD_AT, Long.MIN_VALUE / 2) < HOLD_RECHECK_MS) return
+        // Only the shell may write these, so it goes through Aerial's local adb; without a shell
+        // this does nothing and is tried again next time one is up.
+        val listed = runCatching { AdbBridge.run("cmd deviceidle whitelist +$me") }.getOrDefault(false)
+        if (!listed) return
+        runCatching { AdbBridge.run("cmd appops set $me RUN_IN_BACKGROUND allow") }
+        prefs.edit().putLong(KEY_HELD_AT, now).apply()
+        Log.i(TAG, "asked the system to stop treating Aerial as a background app to free up")
     }
 }

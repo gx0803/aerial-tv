@@ -63,9 +63,12 @@ import app.orchard.tv.BuildConfig
 import app.orchard.tv.HomeViewModel
 import app.orchard.tv.Overlay
 import app.orchard.tv.R
+import app.orchard.tv.Tool
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.MarqueeTheme
 import app.orchard.tv.system.HomeStatus
 import app.orchard.tv.system.NetKind
+import app.orchard.tv.system.RunTime
 import app.orchard.tv.system.SourceKind
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.system.SystemProbe
@@ -104,6 +107,7 @@ fun ControlCenter(
             CcPage.Inputs -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
             CcPage.InputSettings -> vm.overlay = Overlay.ControlCenter(CcPage.Inputs)
             CcPage.Update -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
+            CcPage.Tools -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
         }
     }
 
@@ -147,6 +151,7 @@ fun ControlCenter(
                         CcPage.Inputs -> InputsPage(vm, visible, onOpen)
                         CcPage.InputSettings -> InputSettingsPage(vm, visible)
                         CcPage.Update -> UpdatePage(vm, visible)
+                        CcPage.Tools -> ToolsPage(vm, visible)
                     }
                 }
             }
@@ -214,6 +219,13 @@ private fun MainPage(vm: HomeViewModel, now: LocalDateTime, takeFocus: Boolean, 
             stringResource(R.string.cc_personalize),
             onClick = { vm.overlay = Overlay.Wallpaper },
         )
+        // The projector's own tools: test pictures, a blackout, ambient scenes, the frame's theme.
+        MenuRow(
+            Glyph.Switches,
+            "工具",
+            trailing = "测试图 · 瞬黑 · 氛围屏 · 手机遥控",
+            onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Tools) },
+        )
         Updates.available?.let { latest ->
             MenuRow(
                 Glyph.Info,
@@ -273,6 +285,72 @@ private fun UpdatePage(vm: HomeViewModel, takeFocus: Boolean) {
             Spacer(Modifier.height(10.dp))
             BasicText(stringResource(R.string.cc_update_keeps), style = Type.Caption)
         }
+    }
+}
+
+/**
+ * The projector's toolbox. Test pictures and the blackout take the whole screen, so the panel
+ * closes on the way in; the frame theme and Night are switches that stay in the panel.
+ */
+@Composable
+private fun ToolsPage(vm: HomeViewModel, takeFocus: Boolean) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (!takeFocus) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { first.requestFocus() }
+    }
+    Column(Modifier.heightIn(max = 470.dp).verticalScroll(rememberScrollState())) {
+        MenuRow(Glyph.ChevronLeft, "工具", focusRequester = first, onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Main) })
+
+        Spacer(Modifier.height(8.dp))
+        BasicText("投影", style = Type.Caption, modifier = Modifier.padding(start = 14.dp, bottom = 4.dp))
+        MenuRow(Glyph.Av, "画面测试图", trailing = "网格 · 纯色 · 灰阶 · 彩条 · 对焦", onClick = {
+            vm.overlay = Overlay.None
+            vm.tool = Tool.TestPattern
+        })
+        MenuRow(Glyph.Moon, "瞬黑模式", trailing = "任意键恢复", onClick = {
+            vm.overlay = Overlay.None
+            vm.tool = Tool.Blackout
+        })
+        MenuRow(Glyph.Photo, "氛围屏", trailing = "极光 · 星野 · 炉火", onClick = {
+            vm.overlay = Overlay.None
+            vm.tool = Tool.Ambient
+        })
+        MenuRow(Glyph.Input, "手机遥控", trailing = "扫码：方向键 · 打字 · 配置备份", onClick = {
+            vm.overlay = Overlay.None
+            vm.tool = Tool.Remote
+        })
+
+        Spacer(Modifier.height(12.dp))
+        BasicText("桌面", style = Type.Caption, modifier = Modifier.padding(start = 14.dp, bottom = 4.dp))
+        MenuRow(Glyph.Switches, "边框主题", trailing = AerialSettings.marqueeTheme.label, onClick = {
+            val all = MarqueeTheme.entries
+            AerialSettings.chooseMarqueeTheme(all[(AerialSettings.marqueeTheme.ordinal + 1) % all.size])
+        })
+        MenuRow(Glyph.Sun, "夜间模式", trailing = if (AerialSettings.nightMode) "开" else "关", onClick = {
+            AerialSettings.chooseNightMode(!AerialSettings.nightMode)
+        })
+        // All rows or none: glass on the top row only looked like the rest had been forgotten.
+        MenuRow(Glyph.Switches, "图标毛玻璃", trailing = if (AerialSettings.tileGlass) "整块" else "关闭", onClick = {
+            AerialSettings.chooseTileGlass(!AerialSettings.tileGlass)
+        })
+
+        Spacer(Modifier.height(12.dp))
+        BasicText("光源", style = Type.Caption, modifier = Modifier.padding(start = 14.dp, bottom = 4.dp))
+        MenuRow(
+            Glyph.Info,
+            "使用时长",
+            // The running session is not in the stored total until Aerial goes to the background.
+            trailing = RunTime.hours(RunTime.totalMs + RunTime.currentMs) + " 小时",
+            onClick = {},
+        )
+        BasicText(
+            "本次 ${RunTime.short(RunTime.currentMs)} · 累计 ${RunTime.short(RunTime.totalMs + RunTime.currentMs)}。" +
+                "投影仪不向 Android 报告灯泡/激光时长，这是 Aerial 自己记的前台运行时间。",
+            style = Type.Caption.copy(color = Palette.TertiaryLabel),
+            modifier = Modifier.padding(start = 14.dp, end = 14.dp),
+        )
     }
 }
 
@@ -378,10 +456,7 @@ private fun VolumeRow(vm: HomeViewModel) {
     )
 }
 
-/**
- * Brightness where Aerial may change it; otherwise a row that opens the TV's picture settings, and
- * says so: a bare "Brightness" with no slider read as broken (Vidda 85V1F-S, FFalcon, issue #130).
- */
+/** Brightness where Aerial may change it; otherwise a row that opens the TV's picture settings. */
 @Composable
 private fun BrightnessRow(vm: HomeViewModel) {
     val context = LocalContext.current
@@ -390,13 +465,13 @@ private fun BrightnessRow(vm: HomeViewModel) {
         MenuRow(Glyph.Sun, stringResource(R.string.cc_brightness), onClick = {
             vm.overlay = Overlay.None
             SystemProbe.openPictureSettings(context)
-        }, trailing = stringResource(R.string.cc_brightness_in_settings) + " ›")
+        })
     } else {
         SliderRow(
             glyph = Glyph.Sun,
             level = level,
             value = Math.round(level * 100).toString(),
-            // Brightness.adjust moves 5% a step, and stops at 1%.
+            // Brightness.adjust moves 5% a step.
             steps = 20,
             onStep = vm::adjustBrightness,
             onClick = {},
